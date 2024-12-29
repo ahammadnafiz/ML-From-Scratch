@@ -1,0 +1,19 @@
+digraph forward {
+	rankdir=LR
+	"Z[l]" [label="Z[l] (Pre-activation)" shape=ellipse]
+	Mean [label=Mean shape=ellipse]
+	Variance [label=Variance shape=ellipse]
+	Z_norm [label=Z_norm shape=ellipse]
+	gamma [label="gamma (Learnable)" shape=ellipse]
+	beta [label="beta (Learnable)" shape=ellipse]
+	Z_tilde [label="Z_tilde (Scaled + Shifted)" shape=ellipse]
+	"A[l]" [label="A[l] (Activation)" shape=ellipse]
+	"Z[l]" -> Mean
+	"Z[l]" -> Variance
+	Mean -> Z_norm
+	Variance -> Z_norm
+	Z_norm -> Z_tilde [label="Scaling and shifting"]
+	gamma -> Z_tilde
+	beta -> Z_tilde
+	Z_tilde -> "A[l]" [label=Activation]
+}
