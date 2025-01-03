@@ -110,6 +110,8 @@ Then, the output of the self-attention mechanism is the weighted sum of the valu
 $$
 \text{Output} = \text{Attention Weights} \times \mathbf{V}
 $$
+
+
 ---
 ### 4. **Multi-Head Attention**
 
