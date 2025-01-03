@@ -93,7 +93,6 @@ The attention scores between a query and all keys are computed as:
 
 $$
 \text{Attention Score} = \frac{\mathbf{Q} \mathbf{K}^T}{\sqrt{d_k}}
-
 $$
 
 Where \( $d_k$ \) is the dimensionality of the key vectors (scaling factor to stabilize gradients).
@@ -182,10 +181,10 @@ $$
 \mathbf{z}_{\text{attn}} = \text{LayerNorm}(\mathbf{X} + \text{MultiHead}(\mathbf{Q}, \mathbf{K}, \mathbf{V}))
 $$
 
-
 $$
 \mathbf{z}_{\text{ffn}} = \text{LayerNorm}(\mathbf{z}_{\text{attn}} + \text{FFN}(\mathbf{z}_{\text{attn}}))
 $$
+
 
 ---
 
