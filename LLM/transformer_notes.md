@@ -42,11 +42,10 @@ For a position \( pos \) and dimension \( i \), the positional encoding is:
 
 $$
 PE_{pos, 2i} = \sin \left( \frac{pos}{10000^{\frac{2i}{d}}} \right)
-
 \quad \text{and} \quad
-
 PE_{pos, 2i+1} = \cos \left( \frac{pos}{10000^{\frac{2i}{d}}} \right)
 $$
+
 Where:
 
 - \( pos \) is the position in the sequence (e.g., 1 for the first word).
@@ -157,6 +156,7 @@ The feedforward network is typically composed of two fully connected layers with
 $$
 \text{FFN}(\mathbf{x}) = \max(0, \mathbf{x} \mathbf{W}_1 + \mathbf{b}_1) \mathbf{W}_2 + \mathbf{b}_2
 $$
+
 Where:
 
 - \( $\mathbf{W}_1$ \) and \( $\mathbf{b}_1$ \) are the weights and bias of the first layer.
@@ -214,7 +214,10 @@ After the decoder layers, a **linear transformation** is applied, followed by **
 $$
 \mathbf{Y} = \text{softmax}(\mathbf{z}_{\text{dec}} \mathbf{W}_y + \mathbf{b}_y)
 $$
-Where \( $\mathbf{W}_y$ \) is the weight matrix and \( $\mathbf{b}_y$ \) is the bias.
+
+Where
+
+ \( $\mathbf{W}_y$ \) is the weight matrix and \( $\mathbf{b}_y$ \) is the bias.
 
 ---
 ### 10. **Training Objective**
@@ -225,7 +228,9 @@ $$
 \mathcal{L} = - \sum_{t=1}^{n} \log P(y_t | y_1, \dots, y_{t-1})
 $$
 
-Where \( $P(y_t | y_1, \dots, y_{t-1})$ \) is the probability of generating token \( $y_t$ \) given the previous tokens.
+Where 
+
+\( $P(y_t | y_1, \dots, y_{t-1})$ \) is the probability of generating token \( $y_t$ \) given the previous tokens.
 
 ---
 
