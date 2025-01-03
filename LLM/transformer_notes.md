@@ -79,11 +79,10 @@ The core of the Transformer is **self-attention**, which allows the model to foc
 
 Self-attention calculates three vectors for each token: **Query (Q)**, **Key (K)**, and **Value (V)**. These vectors are obtained by multiplying the input embeddings by learned weight matrices \( $W_Q$ \), \( $W_K$ \), and \( $W_V$ \).
 
-
 $$
-
 \mathbf{Q} = \mathbf{X} \mathbf{W}_Q, \quad \mathbf{K} = \mathbf{X} \mathbf{W}_K, \quad \mathbf{V} = \mathbf{X} \mathbf{W}_V
 $$
+
 Where:
 
 - \( $\mathbf{X}$ \) is the input sequence of token embeddings.
