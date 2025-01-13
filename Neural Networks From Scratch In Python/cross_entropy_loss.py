@@ -53,8 +53,11 @@ class CategoricalCrossEntropyLoss(Loss):
 
 def accuracy(softmax_outputs, targets):
     predictions = np.argmax(softmax_outputs, axis=1)
-    return np.mean(predictions == targets)
 
+    if len(targets.shape) == 2:
+        targets = np.argmax(targets, axis=1)
+
+    return np.mean(predictions==targets)
 
 # Create a dense layer with 2 inputs (features) and 3 neurons
 dense1 = LayerDense(2, 3)
