@@ -1,6 +1,6 @@
 
 import numpy as np
-import matplotlib.pyplot as plt
+
 from nnfs.datasets import spiral_data
 # Input data
 X, y = spiral_data(100, 3)
