@@ -28,8 +28,7 @@ class ActivationReLU:
 class ActivationSoftMax:
     def forward(self, inputs):
         exp_values = np.exp(inputs - np.max(inputs, axis=1, keepdims=True))
-        proba = exp_values / np.sum(exp_values, axis=1, keepdims=True)
-        self.outputs = proba
+        self.outputs = exp_values / np.sum(exp_values, axis=1, keepdims=True)
 
 class Loss:
     def calculate(self, output, y):
