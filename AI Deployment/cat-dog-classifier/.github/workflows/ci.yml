@@ -1,0 +1,45 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      prometheus:
+        image: prom/prometheus
+        ports:
+          - 9090:9090
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: 3.9
+
+    - name: Install dependencies
+      run: |
+        pip install -r app/requirements.txt
+        
+    - name: Run tests
+      run: |
+        pytest tests/
+
+    - name: Build and push Docker images
+      uses: docker/build-push-action@v5
+      with:
+        context: app
+        tags: your-registry/backend:latest
+        push: true
+
+    - name: Build and push Frontend
+      uses: docker/build-push-action@v5
+      with:
+        context: frontend
+        tags: your-registry/frontend:latest
+        push: true
