@@ -9,11 +9,11 @@ from sklearn.metrics.pairwise import cosine_similarity
 import networkx as nx
 from pyvis.network import Network
 
-# Custom CSS for modern layout
+# # Custom CSS for modern layout
 st.markdown("""
     <style>
         .main {
-            max-width: 1200px;
+            max-width: 2500px;
             padding: 2rem;
         }
         .header {
