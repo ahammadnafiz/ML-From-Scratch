@@ -169,3 +169,5 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+ML Practice/Deep Learning/datasets/train_catvnoncat.h5
+ML Practice/Deep Learning/datasets/test_catvnoncat.h5
