@@ -14,8 +14,8 @@ class NeuralNetwork:
         layer_dims = [input_size] + hidden_layers + [output_size]
 
         for l in range(1, len(layer_dims)):
-            self.parameters[f"W{l}"] = np.random.randn(layer_dims[l], layer_dims[l-1]) * (2. / layer_dims[l-1])
-            self.parameters[f"b{l}"] = np.zeros((layer_dims[l], 1))
+            self.parameters[f"W{l}"] = np.random.randn(layer_dims[l], layer_dims[l-1]) * np.sqrt(2. / layer_dims[l-1])
+            self.parameters[f"b{l}"] = np.zeros((layer_dims[l], 1)) * np.sqrt(2./layer_dims[l-1])
 
     def relu(self, Z):
         return np.maximum(0, Z)
