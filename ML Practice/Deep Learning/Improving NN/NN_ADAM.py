@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 class NeuralNetwork:
     def __init__(self, input_size, hidden_layers, output_size, learning_rate=0.01, 
-                 lambda_reg=0.01, keep_prob=0.8, beta=0.9):
+                 lambda_reg=0.01, keep_prob=0.8, beta1=0.9, beta2=0.999, epsilon=1e-8):
         # Store the number of hidden layers
         self.L = len(hidden_layers)
         # Dictionary to store weights and biases
@@ -16,9 +16,12 @@ class NeuralNetwork:
         self.lambda_reg = lambda_reg
         # Dropout keep probability (percentage of neurons to keep during training)
         self.keep_prob = keep_prob
-        # Momentum hyperparameter
-        self.beta = beta
-        self.is_training = True  # Flag to enable/disable dropout during prediction
+        # Adam hyperparameters
+        self.beta1 = beta1         # Decay rate for momentum
+        self.beta2 = beta2         # Decay rate for squared gradients
+        self.epsilon = epsilon     # Small value to avoid division by zero
+        self.is_training = True    # Flag to enable/disable dropout during prediction
+        self.t = 0                 # Time step counter for bias correction
         
         # Initialize weights and biases for all layers
         # layer_dims contains sizes of all layers including input and output
@@ -31,16 +34,19 @@ class NeuralNetwork:
             # Initialize biases to zeros, shape: (current_layer_size, 1)
             self.parameters[f"b{l}"] = np.zeros((self.layer_dims[l], 1))
         
-        # Initialize velocity (for momentum optimization)
-        self.velocity = self.initialize_velocity()
+        # Initialize moment and velocity caches for Adam
+        self.m_cache, self.v_cache = self.initialize_adam_caches()
 
-    def initialize_velocity(self):
-        # Initialize the exponentially weighted average (velocity) for each layer
-        velocity = {}
+    def initialize_adam_caches(self):
+        # Initialize first moment (momentum) and second moment (velocity) for Adam
+        m_cache = {}
+        v_cache = {}
         for l in range(1, len(self.layer_dims)):
-            velocity[f'dW{l}'] = np.zeros_like(self.parameters[f'W{l}'])
-            velocity[f'db{l}'] = np.zeros_like(self.parameters[f'b{l}'])
-        return velocity
+            m_cache[f'dW{l}'] = np.zeros_like(self.parameters[f'W{l}'])
+            m_cache[f'db{l}'] = np.zeros_like(self.parameters[f'b{l}'])
+            v_cache[f'dW{l}'] = np.zeros_like(self.parameters[f'W{l}'])
+            v_cache[f'db{l}'] = np.zeros_like(self.parameters[f'b{l}'])
+        return m_cache, v_cache
 
     def relu(self, Z):
         # ReLU activation function: max(0, Z)
@@ -142,15 +148,28 @@ class NeuralNetwork:
         return grads
 
     def update_parameters(self, grads):
-        # Update all weights and biases using gradient descent with momentum
+        # Update all weights and biases using Adam optimization
+        # Increment time step for bias correction
+        self.t += 1
+        
         for l in range(1, self.L + 2):  # +2 because we include output layer
-            # Update velocity for gradients
-            self.velocity[f'dW{l}'] = self.beta * self.velocity[f'dW{l}'] + (1 - self.beta) * grads[f'dW{l}']
-            self.velocity[f'db{l}'] = self.beta * self.velocity[f'db{l}'] + (1 - self.beta) * grads[f'db{l}']
+            # Update first moment (momentum) cache
+            self.m_cache[f'dW{l}'] = self.beta1 * self.m_cache[f'dW{l}'] + (1 - self.beta1) * grads[f'dW{l}']
+            self.m_cache[f'db{l}'] = self.beta1 * self.m_cache[f'db{l}'] + (1 - self.beta1) * grads[f'db{l}']
             
-            # Update parameters using the velocity
-            self.parameters[f'W{l}'] -= self.learning_rate * self.velocity[f'dW{l}']
-            self.parameters[f'b{l}'] -= self.learning_rate * self.velocity[f'db{l}']
+            # Update second moment (velocity) cache
+            self.v_cache[f'dW{l}'] = self.beta2 * self.v_cache[f'dW{l}'] + (1 - self.beta2) * np.square(grads[f'dW{l}'])
+            self.v_cache[f'db{l}'] = self.beta2 * self.v_cache[f'db{l}'] + (1 - self.beta2) * np.square(grads[f'db{l}'])
+            
+            # Bias correction for first and second moments
+            m_hat_W = self.m_cache[f'dW{l}'] / (1 - self.beta1**self.t)
+            m_hat_b = self.m_cache[f'db{l}'] / (1 - self.beta1**self.t)
+            v_hat_W = self.v_cache[f'dW{l}'] / (1 - self.beta2**self.t)
+            v_hat_b = self.v_cache[f'db{l}'] / (1 - self.beta2**self.t)
+            
+            # Update parameters using Adam formula
+            self.parameters[f'W{l}'] -= self.learning_rate * m_hat_W / (np.sqrt(v_hat_W) + self.epsilon)
+            self.parameters[f'b{l}'] -= self.learning_rate * m_hat_b / (np.sqrt(v_hat_b) + self.epsilon)
 
     def create_mini_batches(self, X, Y, batch_size):
         m = X.shape[1]
@@ -203,7 +222,7 @@ class NeuralNetwork:
                 # Step 3: Backward propagation - compute gradients
                 grads = self.backward_propagation(cache, Y_batch)
 
-                # Step 4: Update parameters using gradients with momentum
+                # Step 4: Update parameters using RMSprop
                 self.update_parameters(grads)
 
             # Store average loss for this epoch
@@ -337,127 +356,9 @@ def plot_decision_boundary(X, y, model, feature_names):
     plt.title("Decision Boundary")
     plt.colorbar()
     plt.show()
-
-# Compare different optimization techniques
-def compare_optimizers(dataset_name="iris", epochs=500):
-    # Load data
-    X_train, X_test, y_train_one_hot, y_test_one_hot, y_train, y_test, feature_names, target_names = load_and_preprocess_data(dataset_name)
     
-    input_size = X_train.shape[0]
-    output_size = y_train_one_hot.shape[0]
-    hidden_layers = [32, 16]  # Smaller network for simpler datasets
-    
-    results = []
-    
-    # Standard Gradient Descent
-    print("\nTraining with Standard Gradient Descent...")
-    nn_sgd = NeuralNetwork(
-        input_size=input_size,
-        hidden_layers=hidden_layers,
-        output_size=output_size,
-        learning_rate=0.01,
-        lambda_reg=0.01,
-        keep_prob=1.0,  # No dropout
-        beta=0.0  # No momentum
-    )
-    
-    loss_sgd = nn_sgd.train(X_train, y_train_one_hot, epochs=epochs, print_loss=True)
-    train_pred_sgd = nn_sgd.predict(X_train)
-    test_pred_sgd = nn_sgd.predict(X_test)
-    
-    train_acc_sgd = calculate_accuracy(train_pred_sgd, y_train)
-    test_acc_sgd = calculate_accuracy(test_pred_sgd, y_test)
-    
-    print(f"SGD - Train accuracy: {train_acc_sgd:.2f}%, Test accuracy: {test_acc_sgd:.2f}%")
-    results.append({
-        'name': 'SGD',
-        'train_acc': train_acc_sgd,
-        'test_acc': test_acc_sgd,
-        'loss': loss_sgd
-    })
-    
-    # Momentum
-    print("\nTraining with Momentum...")
-    nn_momentum = NeuralNetwork(
-        input_size=input_size,
-        hidden_layers=hidden_layers,
-        output_size=output_size,
-        learning_rate=0.01,
-        lambda_reg=0.01,
-        keep_prob=1.0,  # No dropout
-        beta=0.9  # Using momentum
-    )
-    
-    loss_momentum = nn_momentum.train(X_train, y_train_one_hot, epochs=epochs, print_loss=True)
-    train_pred_momentum = nn_momentum.predict(X_train)
-    test_pred_momentum = nn_momentum.predict(X_test)
-    
-    train_acc_momentum = calculate_accuracy(train_pred_momentum, y_train)
-    test_acc_momentum = calculate_accuracy(test_pred_momentum, y_test)
-    
-    print(f"Momentum - Train accuracy: {train_acc_momentum:.2f}%, Test accuracy: {test_acc_momentum:.2f}%")
-    results.append({
-        'name': 'Momentum',
-        'train_acc': train_acc_momentum,
-        'test_acc': test_acc_momentum,
-        'loss': loss_momentum
-    })
-    
-    # Momentum + Dropout
-    print("\nTraining with Momentum + Dropout...")
-    nn_momentum_dropout = NeuralNetwork(
-        input_size=input_size,
-        hidden_layers=hidden_layers,
-        output_size=output_size,
-        learning_rate=0.01,
-        lambda_reg=0.01,
-        keep_prob=0.8,  # Using dropout
-        beta=0.9  # Using momentum
-    )
-    
-    loss_momentum_dropout = nn_momentum_dropout.train(X_train, y_train_one_hot, epochs=epochs, print_loss=True)
-    train_pred_momentum_dropout = nn_momentum_dropout.predict(X_train)
-    test_pred_momentum_dropout = nn_momentum_dropout.predict(X_test)
-    
-    train_acc_momentum_dropout = calculate_accuracy(train_pred_momentum_dropout, y_train)
-    test_acc_momentum_dropout = calculate_accuracy(test_pred_momentum_dropout, y_test)
-    
-    print(f"Momentum+Dropout - Train accuracy: {train_acc_momentum_dropout:.2f}%, Test accuracy: {test_acc_momentum_dropout:.2f}%")
-    results.append({
-        'name': 'Momentum+Dropout',
-        'train_acc': train_acc_momentum_dropout,
-        'test_acc': test_acc_momentum_dropout,
-        'loss': loss_momentum_dropout
-    })
-    
-    # Plot loss comparison
-    plt.figure(figsize=(12, 8))
-    for result in results:
-        plt.plot(range(epochs), result['loss'], label=result['name'])
-    
-    plt.title(f'Loss Comparison on {dataset_name} dataset')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.grid(True)
-    plt.show()
-    
-    # Plot decision boundary for best model
-    best_model = nn_momentum_dropout  # Usually the most complex model performs best
-    plot_decision_boundary(X_train, y_train, best_model, feature_names)
-    
-    # Print results summary
-    print("\nResults Summary:")
-    print("-" * 50)
-    print(f"{'Optimizer':<20} {'Train Accuracy':<15} {'Test Accuracy':<15}")
-    print("-" * 50)
-    for result in results:
-        print(f"{result['name']:<20} {result['train_acc']:<15.2f} {result['test_acc']:<15.2f}")
-    
-    return results, best_model
-
 def main():
-    print("Neural Network with Momentum and Regularization")
+    print("Neural Network with RMSprop Optimization and Regularization")
     print("=" * 50)
     
     # Choose dataset
@@ -473,10 +374,9 @@ def main():
     learning_rate = 0.01
     lambda_reg = 0.01  # L2 regularization parameter
     keep_prob = 0.8    # Dropout keep probability
-    beta = 0.9         # Momentum parameter
     
     # Create neural network
-    nn = NeuralNetwork(input_size, hidden_layers, output_size, learning_rate, lambda_reg, keep_prob, beta)
+    nn = NeuralNetwork(input_size, hidden_layers, output_size, learning_rate, lambda_reg, keep_prob, beta1=0.9, beta2=0.999, epsilon=1e-8)
     
     # Train the network
     print("\nTraining neural network...")
@@ -499,5 +399,4 @@ def main():
 
 if __name__ == "__main__":
     # Choose what to run
-    nn = main()  # Basic training with momentum and regularization
-    # results, best_model = compare_optimizers(dataset_name="iris", epochs=500)  # Compare different optimization techniques
+    nn = main()
