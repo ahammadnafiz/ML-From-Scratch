@@ -1,7 +1,4 @@
 import numpy as np
-from sklearn import datasets
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
 import matplotlib.pyplot as plt
 
 class NeuralNetwork:
@@ -79,12 +76,14 @@ class NeuralNetwork:
         # Derivative of ReLU: 1 if Z > 0, else 0
         return np.where(Z > 0, 1, 0)
 
-    def softmax(self, Z):
-        # Softmax activation for output layer (multi-class classification)
-        # Subtracting max(Z) for numerical stability to prevent overflow
-        exp_Z = np.exp(Z - np.max(Z, axis=0, keepdims=True))
-        # Normalize to get probability distribution
-        return exp_Z / exp_Z.sum(axis=0, keepdims=True)
+    def sigmoid(self, Z):
+        # Sigmoid activation function for binary classification
+        return 1 / (1 + np.exp(-Z))
+    
+    def sigmoid_derivative(self, Z):
+        # Derivative of sigmoid: sigmoid(Z) * (1 - sigmoid(Z))
+        s = self.sigmoid(Z)
+        return s * (1 - s)
         
     def batch_norm_forward(self, Z, gamma, beta, layer_idx, epsilon=1e-8):
         
@@ -193,11 +192,11 @@ class NeuralNetwork:
             cache[f'A{l}'] = A
             A_prev = A  # This layer's output becomes next layer's input
 
-        # Output Layer (layer L+1) uses softmax activation
+        # Output Layer (layer L+1) uses sigmoid activation for binary classification
         W = self.parameters[f'W{self.L + 1}']
         b = self.parameters[f'b{self.L + 1}']
         Z = np.dot(W, A_prev) + b
-        A = self.softmax(Z)  # Convert to probability distribution
+        A = self.sigmoid(Z)  # Use sigmoid for binary classification
 
         cache[f'Z{self.L + 1}'] = Z
         cache[f'A{self.L + 1}'] = A
@@ -205,10 +204,13 @@ class NeuralNetwork:
         return cache
 
     def compute_loss(self, AL, Y):
-        # Cross-entropy loss for softmax output
+        # Binary cross-entropy loss for sigmoid output
         m = Y.shape[1]  # Number of examples
-        # Small epsilon (1e-8) added to prevent log(0)
-        cross_entropy_loss = -np.sum(Y * np.log(AL + 1e-8)) / m
+        
+        # Compute binary cross-entropy loss
+        # Add small epsilon to avoid log(0)
+        epsilon = 1e-15
+        loss = -1/m * np.sum(Y * np.log(AL + epsilon) + (1 - Y) * np.log(1 - AL + epsilon))
         
         # L2 regularization term (sum of squared weights)
         l2_reg_cost = 0
@@ -219,15 +221,16 @@ class NeuralNetwork:
         l2_reg_cost = (self.lambda_reg / (2 * m)) * l2_reg_cost
         
         # Total cost = cross-entropy loss + L2 regularization
-        return cross_entropy_loss + l2_reg_cost
+        return loss + l2_reg_cost
 
     def backward_propagation(self, cache, Y):
         grads = {}  # Store gradients for all parameters
         m = Y.shape[1]  # Number of examples
 
-        # Output Layer gradient calculation
-        # For softmax with cross-entropy, gradient is (prediction - actual)
-        dZ = cache[f'A{self.L + 1}'] - Y
+        # Output Layer gradient calculation for sigmoid with binary cross-entropy
+        AL = cache[f'A{self.L + 1}']
+        dZ = AL - Y  # For sigmoid with cross-entropy
+        
         # Gradient of weights: dW = (dZ · previous_activation_transpose) / m + lambda * W / m (L2 term)
         grads[f'dW{self.L + 1}'] = (np.dot(dZ, cache[f'A{self.L}'].T) / m) + ((self.lambda_reg / m) * self.parameters[f'W{self.L + 1}'])
         # Gradient of biases: sum dZ across examples
@@ -390,133 +393,70 @@ class NeuralNetwork:
         
         # Forward pass to get output probabilities
         cache = self.forward_propagation(X)
-        AL = cache[f'A{self.L + 1}']  # Output layer activation (softmax probabilities)
+        AL = cache[f'A{self.L + 1}']  # Output layer activation (sigmoid probabilities)
         
-        # Get the class with highest probability
-        predictions = np.argmax(AL, axis=0)
-        return predictions.reshape(1, -1)
-
-# Load and preprocess data with make_moons dataset
-def load_moons_dataset(n_samples=1000, noise=0.1, test_size=0.2):
-    print("Loading make_moons dataset...")
-    
-    # Generate the moons dataset
-    X, y = datasets.make_moons(n_samples=n_samples, noise=noise, random_state=42)
-    
-    # Standardize features
-    scaler = StandardScaler()
-    X = scaler.fit_transform(X)
-    
-    # Split data
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
-    
-    # Reshape for neural network (features, samples)
-    X_train = X_train.T
-    X_test = X_test.T
-    
-    # One-hot encode labels
-    encoder = OneHotEncoder(sparse_output=False)
-    y_train_one_hot = encoder.fit_transform(y_train.reshape(-1, 1))
-    y_test_one_hot = encoder.transform(y_test.reshape(-1, 1))
-    
-    # Transpose to match network's expected shape
-    y_train_one_hot = y_train_one_hot.T
-    y_test_one_hot = y_test_one_hot.T
-    
-    # Print shapes
-    print(f"X_train shape: {X_train.shape}")
-    print(f"y_train shape: {y_train_one_hot.shape}")
-    print(f"X_test shape: {X_test.shape}")
-    print(f"y_test shape: {y_test_one_hot.shape}")
-    
-    # Feature names for the 2D moons dataset
-    feature_names = ['Feature 1', 'Feature 2']
-    target_names = ['Class 0', 'Class 1']
-    
-    return X_train, X_test, y_train_one_hot, y_test_one_hot, y_train, y_test, feature_names, target_names
+        # Get the class predictions (1 if probability > 0.5, 0 otherwise)
+        predictions = (AL > 0.5).astype(int)
+        return predictions
 
 # Calculate accuracy
 def calculate_accuracy(predictions, y):
     return np.mean(predictions == y) * 100
 
-# Visualize decision boundaries
-def plot_decision_boundary(X, y, model, feature_names):
-    # Create a mesh grid
-    h = 0.02  # Step size
-    x_min, x_max = X[0].min() - 1, X[0].max() + 1
-    y_min, y_max = X[1].min() - 1, X[1].max() + 1
-    xx, yy = np.meshgrid(np.arange(x_min, x_max, h),
-                       np.arange(y_min, y_max, h))
-    
-    # Create input array for prediction
-    Z_input = np.zeros((X.shape[0], xx.ravel().shape[0]))
-    Z_input[0] = xx.ravel()
-    Z_input[1] = yy.ravel()
-    
-    # Predict class for each point in mesh
-    Z = model.predict(Z_input)
-    Z = Z.reshape(xx.shape)
-    
-    # Plot
-    plt.figure(figsize=(10, 8))
-    plt.contourf(xx, yy, Z, alpha=0.8, cmap=plt.cm.Spectral)
-    
-    # Plot training points
-    scatter = plt.scatter(X[0], X[1], c=y, edgecolors='k', marker='o', cmap=plt.cm.Spectral)
-    plt.xlabel(feature_names[0])
-    plt.ylabel(feature_names[1])
-    plt.title("Decision Boundary for Make Moons Dataset")
-    plt.colorbar(scatter)
-    plt.show()
-    
-def main():
-    print("Neural Network with Adam Optimization, Batch Normalization, and Regularization")
+# Function to train and evaluate the model on cat vs non-cat dataset
+def train_cat_classifier(train_x, train_y, test_x, test_y, classes, print_images=True):
+    print("Training Neural Network for Cat vs Non-Cat Classification")
     print("=" * 70)
     
     # Set random seed for reproducibility
-    np.random.seed(42)
+    np.random.seed(1)
     
-    # Load make_moons dataset with some noise
-    X_train, X_test, y_train_one_hot, y_test_one_hot, y_train, y_test, feature_names, target_names = load_moons_dataset(
-        n_samples=1000, 
-        noise=0.1, 
-        test_size=0.2
-    )
+    # Get data dimensions
+    n_x = train_x.shape[0]  # Input size (number of features)
+    n_y = 1                 # Output size (binary classification)
     
-    # Initialize the neural network
-    input_size = X_train.shape[0]  # 2 features for make_moons
-    hidden_layers = [128, 64, 32, 16]  # Smaller network for simple dataset
-    output_size = y_train_one_hot.shape[0]  # 2 classes for make_moons
-    learning_rate = 0.01
-    lambda_reg = 0.01  # L2 regularization parameter
-    keep_prob = 0.8    # Dropout keep probability
-    use_batch_norm = True  # Enable batch normalization
-    use_mini_batch = True  # Enable mini-batch processing
+    # Define network architecture
+    hidden_layers = [20, 7, 5]  # Hidden layer sizes
+    learning_rate = 0.0075
+    lambda_reg = 0.01    # L2 regularization parameter
+    keep_prob = 0.8      # Dropout keep probability
+    use_batch_norm = True
+    use_mini_batch = True
     
     # Create neural network
-    nn = NeuralNetwork(input_size, hidden_layers, output_size, learning_rate, lambda_reg, 
-                      keep_prob, beta1=0.9, beta2=0.999, epsilon=1e-8, use_batch_norm=use_batch_norm, use_mini_batch=use_mini_batch)
+    nn = NeuralNetwork(n_x, hidden_layers, n_y, learning_rate, lambda_reg, 
+                      keep_prob, beta1=0.9, beta2=0.999, epsilon=1e-8, 
+                      use_batch_norm=use_batch_norm, use_mini_batch=use_mini_batch)
     
     # Train the network
     print("\nTraining neural network...")
-    nn.train(X_train, y_train_one_hot, epochs=500, batch_size=32, print_loss=True)
+    nn.train(train_x, train_y, epochs=2000, batch_size=32, print_loss=True)
     
-    # Evaluate the model
-    train_predictions = nn.predict(X_train)
-    test_predictions = nn.predict(X_test)
+    # Make predictions
+    train_predictions = nn.predict(train_x)
+    test_predictions = nn.predict(test_x)
     
-    train_accuracy = calculate_accuracy(train_predictions, y_train)
-    test_accuracy = calculate_accuracy(test_predictions, y_test)
+    # Calculate accuracies
+    train_accuracy = calculate_accuracy(train_predictions, train_y)
+    test_accuracy = calculate_accuracy(test_predictions, test_y)
     
     print(f"\nTraining accuracy: {train_accuracy:.2f}%")
     print(f"Test accuracy: {test_accuracy:.2f}%")
     
-    # Plot decision boundary
-    print("\nPlotting decision boundary...")
-    plot_decision_boundary(X_train, y_train, nn, feature_names)
+    # Print examples of predictions if requested
+    if print_images:
+        print("\nViewing some predictions:")
+        num_samples_to_show = min(5, test_x.shape[1])
+        
+        for i in range(num_samples_to_show):
+            plt.figure(figsize=(2, 2))
+            # Reshape the flattened image back to (64, 64, 3)
+            img = test_x[:, i].reshape((64, 64, 3))
+            plt.imshow(img)
+            plt.title(f"Prediction: {classes[int(test_predictions[0, i])].decode('utf-8')}")
+            plt.axis('off')
+            plt.show()
+            print(f"True label: {classes[int(test_y[0, i])].decode('utf-8')}")
+            print("-" * 30)
     
-    return nn
-
-if __name__ == "__main__":
-    # Run the neural network on make_moons dataset
-    nn = main()
+    return nn, train_accuracy, test_accuracy
