@@ -61,7 +61,7 @@ class NeuralNetwork:
             v_cache[f'db{l}'] = np.zeros_like(self.parameters[f'b{l}'])
             
             # Add Adam caches for batch norm parameters
-            if self.use_batch_norm and l < len(self.layer_dims) - 1:
+            if self.use_batch_norm and l < len(self.layer_dims) - 1: # No batch norm for output layer
                 m_cache[f'dgamma{l}'] = np.zeros_like(self.parameters[f'gamma{l}'])
                 m_cache[f'dbeta{l}'] = np.zeros_like(self.parameters[f'beta{l}'])
                 v_cache[f'dgamma{l}'] = np.zeros_like(self.parameters[f'gamma{l}'])
@@ -244,7 +244,7 @@ class NeuralNetwork:
             dZ = dA_prev * self.relu_derivative(cache[f'Z{l}'])
             
             # Apply batch normalization backward pass if enabled
-            if self.use_batch_norm and l < self.L + 1:
+            if self.use_batch_norm and l < self.L + 1:     # No batch norm for output layer    
                 dZ, dgamma, dbeta = self.batch_norm_backward(dZ, cache[f'bn_cache{l}'])
                 # Store gradients for batch norm parameters
                 grads[f'dgamma{l}'] = dgamma
@@ -259,7 +259,7 @@ class NeuralNetwork:
     def update_parameters(self, grads):
         # Update all weights and biases using Adam optimization
         # Increment time step for bias correction
-        self.t += 1
+        self.t += 1     
         
         for l in range(1, self.L + 2):  # +2 because we include output layer
             # Update weights and biases
@@ -380,23 +380,12 @@ class NeuralNetwork:
         predictions = np.argmax(AL, axis=0)
         return predictions.reshape(1, -1)
 
-# Load and preprocess data from sklearn
-def load_and_preprocess_data(dataset_name="iris", test_size=0.2):
-    print(f"Loading {dataset_name} dataset...")
+# Load and preprocess data with make_moons dataset
+def load_moons_dataset(n_samples=1000, noise=0.1, test_size=0.2):
+    print("Loading make_moons dataset...")
     
-    # Load dataset
-    if dataset_name == "iris":
-        data = datasets.load_iris()
-    elif dataset_name == "wine":
-        data = datasets.load_wine()
-    elif dataset_name == "breast_cancer":
-        data = datasets.load_breast_cancer()
-    else:
-        # Default to a simple dataset
-        data = datasets.load_iris()
-        
-    X = data.data
-    y = data.target
+    # Generate the moons dataset
+    X, y = datasets.make_moons(n_samples=n_samples, noise=noise, random_state=42)
     
     # Standardize features
     scaler = StandardScaler()
@@ -424,7 +413,11 @@ def load_and_preprocess_data(dataset_name="iris", test_size=0.2):
     print(f"X_test shape: {X_test.shape}")
     print(f"y_test shape: {y_test_one_hot.shape}")
     
-    return X_train, X_test, y_train_one_hot, y_test_one_hot, y_train, y_test, data.feature_names, data.target_names
+    # Feature names for the 2D moons dataset
+    feature_names = ['Feature 1', 'Feature 2']
+    target_names = ['Class 0', 'Class 1']
+    
+    return X_train, X_test, y_train_one_hot, y_test_one_hot, y_train, y_test, feature_names, target_names
 
 # Calculate accuracy
 def calculate_accuracy(predictions, y):
@@ -432,29 +425,17 @@ def calculate_accuracy(predictions, y):
 
 # Visualize decision boundaries
 def plot_decision_boundary(X, y, model, feature_names):
-    # Only plot for 2D data
-    if X.shape[0] > 2:
-        # Use first two features
-        X_reduced = X[:2, :]
-        print("Using only first two features for visualization")
-    else:
-        X_reduced = X
-    
     # Create a mesh grid
     h = 0.02  # Step size
-    x_min, x_max = X_reduced[0].min() - 1, X_reduced[0].max() + 1
-    y_min, y_max = X_reduced[1].min() - 1, X_reduced[1].max() + 1
+    x_min, x_max = X[0].min() - 1, X[0].max() + 1
+    y_min, y_max = X[1].min() - 1, X[1].max() + 1
     xx, yy = np.meshgrid(np.arange(x_min, x_max, h),
-                         np.arange(y_min, y_max, h))
+                       np.arange(y_min, y_max, h))
     
     # Create input array for prediction
-    if X.shape[0] > 2:
-        # Pad with zeros for additional features
-        Z_input = np.zeros((X.shape[0], xx.ravel().shape[0]))
-        Z_input[0] = xx.ravel()
-        Z_input[1] = yy.ravel()
-    else:
-        Z_input = np.c_[xx.ravel(), yy.ravel()].T
+    Z_input = np.zeros((X.shape[0], xx.ravel().shape[0]))
+    Z_input[0] = xx.ravel()
+    Z_input[1] = yy.ravel()
     
     # Predict class for each point in mesh
     Z = model.predict(Z_input)
@@ -462,30 +443,34 @@ def plot_decision_boundary(X, y, model, feature_names):
     
     # Plot
     plt.figure(figsize=(10, 8))
-    plt.contourf(xx, yy, Z, alpha=0.8)
+    plt.contourf(xx, yy, Z, alpha=0.8, cmap=plt.cm.Spectral)
     
     # Plot training points
-    plt.scatter(X_reduced[0], X_reduced[1], c=y, edgecolors='k', marker='o')
+    scatter = plt.scatter(X[0], X[1], c=y, edgecolors='k', marker='o', cmap=plt.cm.Spectral)
     plt.xlabel(feature_names[0])
     plt.ylabel(feature_names[1])
-    plt.title("Decision Boundary")
-    plt.colorbar()
+    plt.title("Decision Boundary for Make Moons Dataset")
+    plt.colorbar(scatter)
     plt.show()
     
 def main():
     print("Neural Network with Adam Optimization, Batch Normalization, and Regularization")
     print("=" * 70)
     
-    # Choose dataset
-    dataset_name = "breast_cancer"  # Options: "iris", "wine", "breast_cancer"
+    # Set random seed for reproducibility
+    np.random.seed(42)
     
-    # Load data
-    X_train, X_test, y_train_one_hot, y_test_one_hot, y_train, y_test, feature_names, target_names = load_and_preprocess_data(dataset_name)
+    # Load make_moons dataset with some noise
+    X_train, X_test, y_train_one_hot, y_test_one_hot, y_train, y_test, feature_names, target_names = load_moons_dataset(
+        n_samples=1000, 
+        noise=0.1, 
+        test_size=0.2
+    )
     
     # Initialize the neural network
-    input_size = X_train.shape[0]
-    hidden_layers = [128, 64]  # Smaller network for simpler datasets
-    output_size = y_train_one_hot.shape[0]
+    input_size = X_train.shape[0]  # 2 features for make_moons
+    hidden_layers = [128, 64, 32, 16]  # Smaller network for simple dataset
+    output_size = y_train_one_hot.shape[0]  # 2 classes for make_moons
     learning_rate = 0.01
     lambda_reg = 0.01  # L2 regularization parameter
     keep_prob = 0.8    # Dropout keep probability
@@ -497,7 +482,7 @@ def main():
     
     # Train the network
     print("\nTraining neural network...")
-    nn.train(X_train, y_train_one_hot, epochs=500, batch_size=16, print_loss=True)
+    nn.train(X_train, y_train_one_hot, epochs=500, batch_size=32, print_loss=True)
     
     # Evaluate the model
     train_predictions = nn.predict(X_train)
@@ -510,10 +495,11 @@ def main():
     print(f"Test accuracy: {test_accuracy:.2f}%")
     
     # Plot decision boundary
+    print("\nPlotting decision boundary...")
     plot_decision_boundary(X_train, y_train, nn, feature_names)
     
     return nn
 
 if __name__ == "__main__":
-    # Choose what to run
+    # Run the neural network on make_moons dataset
     nn = main()
