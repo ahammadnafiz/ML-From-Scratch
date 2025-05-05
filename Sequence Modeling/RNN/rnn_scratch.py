@@ -11,8 +11,9 @@ T = 3    # Number of time steps
 np.random.seed(0)
 
 # Parameters initialization
+# Initialize with small random values to break symmetry
 W_hx = np.random.randn(n_h, n_x) * 0.01  # Input to hidden layer weights
-W_hh = np.random.randn(n_h, n_h) * 0.01  # Hidden to hidden layer weights
+W_hh = np.random.randn(n_h, n_h) * 0.01  # Hidden to hidden layer weights (recurrent connections)
 W_yh = np.random.randn(n_y, n_h) * 0.01  # Hidden to output layer weights
 
 b_h = np.zeros((n_h, 1))  # Hidden layer bias
@@ -20,57 +21,96 @@ b_y = np.zeros((n_y, 1))  # Output layer bias
 
 # Activation functions
 def tanh(x):
+    # Hyperbolic tangent: tanh(x) = (e^x - e^-x) / (e^x + e^-x)
+    # Range: [-1, 1]
     return np.tanh(x)
 
 def dtanh(x):
+    # Derivative of tanh: d/dx tanh(x) = 1 - tanh(x)^2
     return 1.0 - np.tanh(x) ** 2
 
 def softmax(x):
+    # Softmax function: σ(z)_j = e^(z_j) / Σ_k(e^(z_k))
+    # Subtracting max(x) for numerical stability to avoid overflow
     e_x = np.exp(x - np.max(x, axis=0, keepdims=True))
     return e_x / np.sum(e_x, axis=0, keepdims=True)
 
 def rnn_forward(X, Y):
-    h = {-1: np.zeros((n_h, 1))} # Initial hidden state
+    # Forward pass through the RNN
+    h = {-1: np.zeros((n_h, 1))}  # Initial hidden state h₀ = 0
     a, z, y_hat = {}, {}, {}
     loss = 0
 
     for t in range(T):
-        x_t = X[t].reshape(-1, 1)
+        x_t = X[t].reshape(-1, 1)  # Input at time t
+        
+        # Hidden state update: a_t = W_hx * x_t + W_hh * h_(t-1) + b_h
         a[t] = np.dot(W_hx, x_t) + np.dot(W_hh, h[t-1]) + b_h
+        
+        # Apply tanh activation: h_t = tanh(a_t)
         h[t] = np.tanh(a[t])
+        
+        # Output layer: z_t = W_yh * h_t + b_y
         z[t] = np.dot(W_yh, h[t]) + b_y
+        
+        # Apply softmax for probability distribution: y_hat_t = softmax(z_t)
         y_hat[t] = softmax(z[t])
-        loss += -np.sum(Y[t].reshape(-1, 1) * np.log(y_hat[t] + 1e-8))  # Avoid log(0)
+        
+        # Cross-entropy loss: L_t = -Σ(y_t * log(y_hat_t))
+        # 1e-8 added to avoid log(0)
+        loss += -np.sum(Y[t].reshape(-1, 1) * np.log(y_hat[t] + 1e-8))
 
+    # Save values for backpropagation
     cache = (X, Y, a, h, z, y_hat)
     return loss, cache
 
 def rnn_backward(cache):
+    # Backpropagation through time (BPTT)
     X, Y, a, h, z, y_hat = cache
 
+    # Initialize gradient accumulators
     dW_hx = np.zeros_like(W_hx)
     dW_hh = np.zeros_like(W_hh)
     db_h = np.zeros_like(b_h)
     dW_yh = np.zeros_like(W_yh)
     db_y = np.zeros_like(b_y)
 
+    # Initialize gradient of future hidden state
     dh_next = np.zeros_like(h[0])
     
+    # Iterate backwards through time
     for t in reversed(range(T)):
-        dz = y_hat[t] - Y[t].reshape(-1, 1)  # Gradient of loss w.r.t. z
+        # Gradient of loss w.r.t softmax output: dL/dz_t = y_hat_t - y_t
+        # This is the derivative of cross-entropy loss with softmax
+        dz = y_hat[t] - Y[t].reshape(-1, 1)
+        
+        # Gradient w.r.t W_yh: dL/dW_yh = dL/dz_t * h_t^T
         dW_yh += np.dot(dz, h[t].T)
+        
+        # Gradient w.r.t b_y: dL/db_y = dL/dz_t
         db_y += dz
         
-        dh = np.dot(W_yh.T, dz) + dh_next  # Gradient of loss w.r.t. h
+        # Gradient w.r.t hidden state: dL/dh_t = W_yh^T * dL/dz_t + dL/dh_(t+1)
+        # The second term comes from the recurrent connection (future gradient)
+        dh = np.dot(W_yh.T, dz) + dh_next
+        
+        # Gradient w.r.t pre-activation: dL/da_t = dL/dh_t * tanh'(a_t)
         da = dtanh(a[t]) * dh
+        
+        # Gradient w.r.t W_hh: dL/dW_hh = dL/da_t * h_(t-1)^T
         dW_hh += np.dot(da, h[t-1].T)
+        
+        # Gradient w.r.t W_hx: dL/dW_hx = dL/da_t * x_t^T
         dW_hx += np.dot(da, X[t].reshape(-1, 1).T)
+        
+        # Gradient w.r.t b_h: dL/db_h = dL/da_t
         db_h += da
+        
+        # Gradient for next iteration: dL/dh_(t-1) = W_hh^T * dL/da_t
         dh_next = np.dot(W_hh.T, da)
-        dh_next = dh_next * (1 - np.tanh(a[t]) ** 2)
-        # Note: We do not need to backpropagate through the input layer
-        # as we are not updating W_xh in this example.
-    # Clip gradients to prevent exploding gradients
+        
+    # Clip gradients to prevent exploding gradients problem
+    # This is a common technique in RNN training
     for dparam in [dW_hx, dW_hh, db_h, dW_yh, db_y]:
         np.clip(dparam, -5, 5, out=dparam)
         
@@ -86,11 +126,16 @@ def rnn_backward(cache):
 
 def update_parameters(gradients, learning_rate=0.01):
     """
-    Update the parameters using gradient descent
+    Update the parameters using gradient descent:
+    θ = θ - α * ∇J(θ)
+    where:
+    θ: parameter
+    α: learning rate
+    ∇J(θ): gradient of cost function w.r.t parameter
     """
     global W_hx, W_hh, b_h, W_yh, b_y
     
-    # Update parameters using gradient descent
+    # Update each parameter by subtracting the scaled gradient
     W_hx -= learning_rate * gradients['dW_hx']
     W_hh -= learning_rate * gradients['dW_hh']
     b_h -= learning_rate * gradients['db_h']
@@ -99,20 +144,24 @@ def update_parameters(gradients, learning_rate=0.01):
 
 def predict(X):
     """
-    Predict function for making predictions
+    Make predictions using the trained RNN model
+    Only performs the forward pass without computing loss
     """
     h = {}
-    h[-1] = np.zeros((n_h, 1))
+    h[-1] = np.zeros((n_h, 1))  # Initialize first hidden state to zeros
     y_hat = {}
     
     # Forward pass only
     for t in range(len(X)):
         x_t = X[t].reshape(-1, 1)
+        # h_t = tanh(W_hx * x_t + W_hh * h_(t-1) + b_h)
         h[t] = tanh(np.dot(W_hx, x_t) + np.dot(W_hh, h[t-1]) + b_h)
+        # z_t = W_yh * h_t + b_y
         z_t = np.dot(W_yh, h[t]) + b_y
+        # y_hat_t = softmax(z_t)
         y_hat[t] = softmax(z_t)
     
-    # Return predictions (class indices)
+    # Return class with highest probability for each time step
     predictions = [np.argmax(y_hat[t]) for t in range(len(X))]
     return predictions
 
@@ -133,8 +182,9 @@ def generate_toy_data(num_samples, sequence_length=T):
         # Create target labels (example rule: sum of inputs determines class)
         targets = []
         for t in range(sequence_length):
-            # Sum of input values > 0 => class 0
-            # Sum of input values < 0 => class 1
+            # Classification rule:
+            # Sum of input values > 0.5 => class 0
+            # Sum of input values < -0.5 => class 1
             # Otherwise => class 2
             input_sum = np.sum(sequence[t])
             if input_sum > 0.5:
@@ -144,7 +194,7 @@ def generate_toy_data(num_samples, sequence_length=T):
             else:
                 target = 2
                 
-            # One-hot encode
+            # One-hot encode the target: [1,0,0] for class 0, [0,1,0] for class 1, [0,0,1] for class 2
             one_hot = np.zeros(n_y)
             one_hot[target] = 1
             targets.append(one_hot)
@@ -156,7 +206,7 @@ def generate_toy_data(num_samples, sequence_length=T):
 # Train the RNN model
 def train_rnn(X_data, Y_data, num_epochs=100, learning_rate=0.01):
     """
-    Train the RNN model with the provided data
+    Train the RNN model with the provided data using gradient descent
     """
     losses = []
     
@@ -167,17 +217,17 @@ def train_rnn(X_data, Y_data, num_epochs=100, learning_rate=0.01):
             X = X_data[i]
             Y = Y_data[i]
             
-            # Forward pass
+            # Forward pass: compute loss L(θ)
             loss, cache = rnn_forward(X, Y)
             epoch_loss += loss
             
-            # Backward pass
+            # Backward pass: compute gradients ∇L(θ)
             gradients = rnn_backward(cache)
             
-            # Update parameters
+            # Update parameters: θ = θ - α * ∇L(θ)
             update_parameters(gradients, learning_rate)
         
-        # Track progress
+        # Track average loss per epoch
         avg_loss = epoch_loss / len(X_data)
         losses.append(avg_loss)
         
@@ -190,6 +240,7 @@ def train_rnn(X_data, Y_data, num_epochs=100, learning_rate=0.01):
 def evaluate_model(X_test, Y_test):
     """
     Evaluate the model's performance
+    Accuracy = (Number of correct predictions) / (Total number of predictions)
     """
     correct = 0
     total = 0
@@ -198,18 +249,19 @@ def evaluate_model(X_test, Y_test):
         X = X_test[i]
         Y = Y_test[i]
         
-        # Get predictions
+        # Get model predictions
         predictions = predict(X)
         
-        # Get true labels
+        # Get true labels from one-hot encoded targets
         true_labels = [np.argmax(Y[t]) for t in range(len(Y))]
         
-        # Count correct predictions
+        # Count correct predictions across all time steps
         for t in range(len(predictions)):
             if predictions[t] == true_labels[t]:
                 correct += 1
             total += 1
     
+    # Accuracy = correct / total
     accuracy = correct / total
     return accuracy
 
