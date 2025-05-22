@@ -1,373 +1,443 @@
+import re
 import numpy as np
+from collections import defaultdict
 import matplotlib.pyplot as plt
-from sklearn.manifold import TSNE
-import random
+from sklearn.decomposition import PCA
+
+def tokenize(text):
+    """Convert text to lowercase tokens"""
+    return re.findall(r'\b[a-z]+\b', text.lower())
+
+def build_vocabulary(tokens, min_count=1):
+    """Create word-to-index and index-to-word mappings"""
+    word_counts = defaultdict(int)
+    
+    # Count word frequencies
+    for token in tokens:
+        word_counts[token] += 1
+    
+    # Filter by minimum count and create mappings
+    vocab = {}
+    idx_to_word = {}
+    
+    # Sort by frequency to ensure consistent ordering
+    sorted_words = sorted(word_counts.items(), key=lambda x: x[1], reverse=True)
+    
+    idx = 0
+    for word, count in sorted_words:
+        if count >= min_count:
+            vocab[word] = idx
+            idx_to_word[idx] = word
+            idx += 1
+    
+    return vocab, idx_to_word
+
+def generate_training_pairs(tokens, vocab, window_size=2):
+    """Create (center_word, context_word) pairs for training"""
+    pairs = []
+    
+    for i, center_word in enumerate(tokens):
+        if center_word not in vocab:
+            continue
+        
+        # Define context window bounds
+        start = max(0, i - window_size)
+        end = min(len(tokens), i + window_size + 1)
+        
+        # Collect context words
+        for j in range(start, end):
+            if i != j and tokens[j] in vocab:
+                center_idx = vocab[center_word]
+                context_idx = vocab[tokens[j]]
+                pairs.append((center_idx, context_idx))
+    
+    return pairs
 
 class Word2Vec:
-    def __init__(self, sentences, embedding_dim=10, window_size=2, learning_rate=0.01, 
-                 epochs=100, neg_samples=5):
-        """
-        Initialize Word2Vec model using Skip-gram with Negative Sampling
-        
-        Parameters:
-        - sentences: List of tokenized sentences (list of lists of strings)
-        - embedding_dim: Dimension of word embeddings
-        - window_size: Context window size
-        - learning_rate: Learning rate for gradient descent
-        - epochs: Number of training epochs
-        - neg_samples: Number of negative samples per positive sample
-        """
-        self.sentences = sentences
+    def __init__(self, vocab_size, embedding_dim=100):
+        """Initialize embedding matrices"""
+        self.vocab_size = vocab_size
         self.embedding_dim = embedding_dim
-        self.window_size = window_size
-        self.learning_rate = learning_rate
-        self.epochs = epochs
-        self.neg_samples = neg_samples
         
-        # Create vocabulary and mappings
-        self._build_vocabulary()  
+        # W₁: Input embeddings (V × N) - Xavier initialization
+        self.W1 = np.random.normal(0, 0.1, (vocab_size, embedding_dim))
         
-        # Initialize embeddings
-        # Input embeddings (target words)
-        self.W = np.random.uniform(-0.5 / self.embedding_dim, 0.5 / self.embedding_dim, 
-                                  (self.vocab_size, self.embedding_dim))
-        # Output embeddings (context words)
-        self.W_prime = np.random.uniform(-0.5 / self.embedding_dim, 0.5 / self.embedding_dim, 
-                                       (self.vocab_size, self.embedding_dim))
-        
-        # Build sampling tables for negative sampling
-        self._build_sampling_table()
+        # W₂: Output embeddings (N × V) - Xavier initialization  
+        self.W2 = np.random.normal(0, 0.1, (embedding_dim, vocab_size))
     
-    def _build_vocabulary(self):
-        """Build vocabulary and word-to-index mappings"""
-        # Flatten sentences
-        all_words = [word for sentence in self.sentences for word in sentence]
-        
-        # Get unique words
-        unique_words = list(set(all_words))
-        self.vocab_size = len(unique_words)
-        
-        # Create word-to-index and index-to-word mappings
-        self.word_to_idx = {word: idx for idx, word in enumerate(unique_words)}
-        self.idx_to_word = {idx: word for idx, word in enumerate(unique_words)}
-        
-        # Count word frequencies
-        self.word_counts = {}
-        for word in all_words:
-            if word in self.word_counts:
-                self.word_counts[word] += 1
-            else:
-                self.word_counts[word] = 1
-        
-        # Calculate total number of words
-        self.total_words = len(all_words)
-    
-    def _build_sampling_table(self):
-        """
-        Build the sampling table for negative sampling
-        Uses the unigram distribution raised to the 3/4 power
-        """
-        # Calculate sampling weights for each word
-        sampling_weights = np.zeros(self.vocab_size)
-        for word, idx in self.word_to_idx.items():
-            sampling_weights[idx] = self.word_counts[word] ** 0.75
-        
-        # Normalize to create a probability distribution
-        self.sampling_weights = sampling_weights / np.sum(sampling_weights)
-    
-    def _sigmoid(self, x):
-        """Compute sigmoid function"""
+    def sigmoid(self, x):
+        """Numerically stable sigmoid function"""
+        x = np.clip(x, -500, 500)  # Prevent overflow
         return 1 / (1 + np.exp(-x))
     
-    def _get_context_pairs(self):
-        """Generate all target-context word pairs from sentences"""
-        pairs = []
+    def forward_pass(self, center_idx, context_idx):
+        """Compute forward pass for single training pair"""
         
-        for sentence in self.sentences:
-            sentence_indices = [self.word_to_idx[word] for word in sentence]
-            
-            # For each position in the sentence
-            for pos, target_idx in enumerate(sentence_indices):
-                # Define context window boundaries
-                start = max(0, pos - self.window_size)
-                end = min(len(sentence_indices), pos + self.window_size + 1)
-                
-                # For each word in the context window
-                for context_pos in range(start, end):
-                    # Skip the target word itself
-                    if context_pos != pos:
-                        context_idx = sentence_indices[context_pos]
-                        pairs.append((target_idx, context_idx))
+        # Step 1: Embedding lookup (Layer 1)
+        # L₁ = XW₁ where X is one-hot
+        center_embedding = self.W1[center_idx, :]  # Shape: (embedding_dim,)
         
-        return pairs
+        # Step 2: Compute scores (Layer 2)  
+        # L₂ = L₁W₂
+        scores = np.dot(center_embedding, self.W2)  # Shape: (vocab_size,)
+        
+        # Step 3: Softmax probabilities (Layer 3)
+        # Numerically stable softmax
+        exp_scores = np.exp(scores - np.max(scores))
+        probabilities = exp_scores / np.sum(exp_scores)
+        
+        return center_embedding, scores, probabilities
     
-    def _sample_negative(self, positive_context_idx, n_samples):
-        """Sample negative context words from sampling distribution"""
-        # Sample words based on sampling weights
-        negative_samples = []
-        while len(negative_samples) < n_samples:
-            idx = np.random.choice(self.vocab_size, p=self.sampling_weights)
-            # Ensure we don't sample the positive context word
-            if idx != positive_context_idx:
-                negative_samples.append(idx)
+    def backward_pass(self, center_idx, context_idx, center_embedding, 
+                      probabilities, learning_rate=0.01):
+        """Compute gradients and update weights"""
         
-        return negative_samples
+        # Step 1: Compute output gradient
+        # ∂L/∂scores = probabilities - one_hot_target
+        grad_scores = probabilities.copy()
+        grad_scores[context_idx] -= 1  # Subtract 1 for correct word
+        
+        # Step 2: Compute W₂ gradient
+        # ∂L/∂W₂ = center_embedding^T ⊗ grad_scores
+        grad_W2 = np.outer(center_embedding, grad_scores)
+        
+        # Step 3: Compute center embedding gradient  
+        # ∂L/∂center_embedding = W₂ @ grad_scores
+        grad_center_embedding = np.dot(self.W2, grad_scores)
+        
+        # Step 4: Update weights
+        self.W2 -= learning_rate * grad_W2.T  # Note the transpose
+        self.W1[center_idx, :] -= learning_rate * grad_center_embedding
+        
+        # Step 5: Compute loss for monitoring
+        loss = -np.log(probabilities[context_idx] + 1e-10)  # Add small value for stability
+        return loss
     
-    def train(self):
-        """Train the Word2Vec model"""
-        print("Generating training pairs...")
-        pairs = self._get_context_pairs()
-        n_pairs = len(pairs)
+    def train_with_negative_sampling(self, center_idx, context_idx, 
+                                    negative_samples, learning_rate=0.01):
+        """Train using negative sampling (much faster)"""
         
-        print(f"Training on {n_pairs} word pairs...")
+        center_embedding = self.W1[center_idx, :]
         
-        for epoch in range(self.epochs):
-            total_loss = 0
+        # Initialize gradients
+        grad_center = np.zeros_like(center_embedding)
+        total_loss = 0
+        
+        # Positive sample: actual context word
+        context_vec = self.W2[:, context_idx]
+        score = np.dot(center_embedding, context_vec)
+        # Clip score to prevent overflow
+        score = np.clip(score, -10, 10)
+        sigmoid_score = self.sigmoid(score)
+        
+        # Loss and gradients for positive sample
+        loss = -np.log(sigmoid_score + 1e-10)
+        grad = (sigmoid_score - 1)  # ∂L/∂score for positive sample
+        
+        grad_center += grad * context_vec
+        self.W2[:, context_idx] -= learning_rate * grad * center_embedding
+        total_loss += loss
+        
+        # Negative samples: random words
+        for neg_idx in negative_samples:
+            if neg_idx == center_idx or neg_idx == context_idx:
+                continue
+                
+            neg_vec = self.W2[:, neg_idx]
+            score = np.dot(center_embedding, neg_vec)
+            # Clip score to prevent overflow
+            score = np.clip(score, -10, 10)
+            sigmoid_score = self.sigmoid(score)
             
-            # Shuffle pairs for each epoch
-            random.shuffle(pairs)
+            # Loss and gradients for negative sample
+            loss = -np.log(1 - sigmoid_score + 1e-10)
+            grad = sigmoid_score  # ∂L/∂score for negative sample
             
-            for i, (target_idx, context_idx) in enumerate(pairs):
-                # Forward pass
-                # Get target embedding
-                target_embed = self.W[target_idx]
-                
-                # Positive pair
-                dot_product = np.dot(target_embed, self.W_prime[context_idx])
-                sigmoid_pos = self._sigmoid(dot_product)
-                loss_pos = -np.log(sigmoid_pos)
-                
-                # Negative samples
-                neg_indices = self._sample_negative(context_idx, self.neg_samples)
-                loss_neg = 0
-                
-                # Accumulated gradients
-                # Initialize gradient for target embedding
-                grad_target = np.zeros(self.embedding_dim)
-                
-                # Gradient for positive context
-                context_grad = (sigmoid_pos - 1) * target_embed
-                grad_target += (sigmoid_pos - 1) * self.W_prime[context_idx]
-                
-                # Update positive context embedding
-                self.W_prime[context_idx] -= self.learning_rate * context_grad
-                
-                # Process negative samples
-                for neg_idx in neg_indices:
-                    # Compute loss and gradients for negative sample
-                    dot_product_neg = np.dot(target_embed, self.W_prime[neg_idx])
-                    sigmoid_neg = self._sigmoid(dot_product_neg)
-                    loss_neg -= np.log(1 - sigmoid_neg)
-                    
-                    # Gradient for negative context
-                    neg_context_grad = sigmoid_neg * target_embed
-                    # Add contribution to target gradient
-                    grad_target += sigmoid_neg * self.W_prime[neg_idx]
-                    
-                    # Update negative context embedding
-                    self.W_prime[neg_idx] -= self.learning_rate * neg_context_grad
-                
-                # Update target embedding
-                self.W[target_idx] -= self.learning_rate * grad_target
-                
-                # Track loss
-                total_loss += loss_pos + loss_neg
-            
-            # Decay learning rate
-            self.learning_rate = self.learning_rate * 0.99
-            
-            if epoch % 10 == 0 or epoch == self.epochs - 1:
-                avg_loss = total_loss / n_pairs
-                print(f"Epoch {epoch + 1}/{self.epochs}, Loss: {avg_loss:.4f}")
-    
-    def get_word_vector(self, word):
-        """Get embedding vector for a word"""
-        if word in self.word_to_idx:
-            return self.W[self.word_to_idx[word]]
-        else:
-            return None
-    
-    def find_similar(self, word, n=5):
-        """Find n most similar words to the given word"""
-        if word not in self.word_to_idx:
-            print(f"Word '{word}' not in vocabulary.")
-            return []
+            grad_center += grad * neg_vec
+            self.W2[:, neg_idx] -= learning_rate * grad * center_embedding
+            total_loss += loss
         
-        word_idx = self.word_to_idx[word]
-        word_vec = self.W[word_idx]
+        # Update center word embedding with gradient clipping
+        grad_center = np.clip(grad_center, -1, 1)
+        self.W1[center_idx, :] -= learning_rate * grad_center
         
-        # Normalize the query vector
-        word_vec = word_vec / np.linalg.norm(word_vec)
-        
-        # Compute cosine similarities
-        similarities = {}
-        for idx, vec in enumerate(self.W):
-            if idx != word_idx:
-                # Normalize the word vector
-                vec_norm = vec / np.linalg.norm(vec)
-                # Calculate cosine similarity
-                similarity = np.dot(word_vec, vec_norm)
-                similarities[self.idx_to_word[idx]] = similarity
-        
-        # Sort by similarity and return top n
-        sorted_words = sorted(similarities.items(), key=lambda x: x[1], reverse=True)
-        return sorted_words[:n]
-    
-    def visualize_embeddings(self, words=None, n=100):
-        """
-        Visualize word embeddings using t-SNE
-        
-        Parameters:
-        - words: List of specific words to visualize 
-                (if None, visualize top n frequent words)
-        - n: Number of most frequent words to visualize
-        """
-        if words is None:
-            # Get top n frequent words
-            word_freq = [(word, count) for word, count in self.word_counts.items()]
-            word_freq.sort(key=lambda x: x[1], reverse=True)
-            words = [word for word, _ in word_freq[:n]]
-        
-        # Get embeddings for the words
-        word_indices = [self.word_to_idx[word] for word in words if word in self.word_to_idx]
-        
-        # Check if we have enough words to visualize
-        if len(word_indices) < 2:
-            print("Not enough words to visualize. Need at least 2 words.")
-            return
-            
-        embeddings = self.W[word_indices]
-        
-        # Apply t-SNE for dimensionality reduction
-        # Adjust perplexity to be less than n_samples
-        perplexity = min(30, len(word_indices) - 1)  # Default is 30, but must be < n_samples
-        tsne = TSNE(n_components=2, random_state=42, perplexity=perplexity)
-        embeddings_2d = tsne.fit_transform(embeddings)
-        
-        # Plot
-        plt.figure(figsize=(12, 10))
-        for i, word in enumerate([self.idx_to_word[idx] for idx in word_indices]):
-            x, y = embeddings_2d[i, :]
-            plt.scatter(x, y, marker='o')
-            plt.annotate(word, (x, y), fontsize=9)
-        
-        plt.title('t-SNE visualization of word embeddings')
-        plt.grid(True)
-        plt.show()
+        return total_loss
 
-    def analogy(self, word1, word2, word3, n=5):
-        """
-        Solve word analogies like "king - man + woman = ?"
-        Example: analogy("king", "man", "woman") should return "queen"
-        """
-        if word1 not in self.word_to_idx or \
-           word2 not in self.word_to_idx or \
-           word3 not in self.word_to_idx:
-            print(f"One or more words not in vocabulary")
-            return []
-        
-        # Get word vectors
-        vec1 = self.get_word_vector(word1)
-        vec2 = self.get_word_vector(word2)
-        vec3 = self.get_word_vector(word3)
-        
-        # Calculate the analogy vector
-        analogy_vec = vec1 - vec2 + vec3
-        
-        # Normalize the analogy vector
-        analogy_vec = analogy_vec / np.linalg.norm(analogy_vec)
-        
-        # Find closest words to the analogy vector
-        similarities = {}
-        for idx, vec in enumerate(self.W):
-            # Skip the input words
-            if self.idx_to_word[idx] not in [word1, word2, word3]:
-                # Normalize the word vector
-                vec_norm = vec / np.linalg.norm(vec)
-                # Calculate cosine similarity
-                similarity = np.dot(analogy_vec, vec_norm)
-                similarities[self.idx_to_word[idx]] = similarity
-        
-        # Sort and return top n
-        sorted_words = sorted(similarities.items(), key=lambda x: x[1], reverse=True)
-        return sorted_words[:n]
+def train_word2vec(text, embedding_dim=100, window_size=2, 
+                   negative_samples=5, epochs=5, learning_rate=0.01):
+    """Complete training pipeline"""
     
-# Example usage
+    # Data preparation
+    tokens = tokenize(text)
+    vocab, idx_to_word = build_vocabulary(tokens, min_count=1)  # Reduced min_count for small corpus
+    training_pairs = generate_training_pairs(tokens, vocab, window_size)
+    
+    print(f"Vocabulary size: {len(vocab)}")
+    print(f"Training pairs: {len(training_pairs)}")
+    print(f"Tokens: {len(tokens)}")
+    
+    if len(vocab) < 3:
+        print("Warning: Vocabulary too small for meaningful training")
+        return None, None, None
+    
+    # Initialize model
+    model = Word2Vec(len(vocab), embedding_dim)
+    
+    # Adjust negative samples if vocabulary is small
+    actual_negative_samples = min(negative_samples, max(1, len(vocab) - 2))
+    
+    # Training loop
+    for epoch in range(epochs):
+        total_loss = 0
+        np.random.shuffle(training_pairs)  # Shuffle for better convergence
+        
+        for center_idx, context_idx in training_pairs:
+            # Sample negative examples (ensure we don't exceed vocab size)
+            if actual_negative_samples > 0:
+                # Create a list excluding center and context words
+                available_indices = [i for i in range(len(vocab)) if i != center_idx and i != context_idx]
+                if len(available_indices) >= actual_negative_samples:
+                    negative_idxs = np.random.choice(
+                        available_indices, 
+                        size=actual_negative_samples, 
+                        replace=False
+                    )
+                else:
+                    negative_idxs = available_indices
+            else:
+                negative_idxs = []
+            
+            # Train on this pair
+            if len(negative_idxs) > 0:
+                loss = model.train_with_negative_sampling(
+                    center_idx, context_idx, negative_idxs, learning_rate
+                )
+                total_loss += loss
+        
+        if training_pairs:
+            avg_loss = total_loss / len(training_pairs)
+            print(f"Epoch {epoch + 1}/{epochs}, Average Loss: {avg_loss:.4f}")
+    
+    return model, vocab, idx_to_word
+
+def find_similar_words(model, word, vocab, idx_to_word, top_k=5):
+    """Find most similar words using cosine similarity"""
+    if word not in vocab:
+        return f"Word '{word}' not in vocabulary"
+    
+    word_idx = vocab[word]
+    word_vec = model.W1[word_idx, :]  # Get embedding
+    
+    similarities = []
+    for idx, other_word in idx_to_word.items():
+        if idx != word_idx:
+            other_vec = model.W1[idx, :]
+            
+            # Cosine similarity: cos(θ) = (a·b)/(|a||b|)
+            norm_word = np.linalg.norm(word_vec)
+            norm_other = np.linalg.norm(other_vec)
+            
+            if norm_word > 0 and norm_other > 0:
+                cosine_sim = np.dot(word_vec, other_vec) / (norm_word * norm_other)
+            else:
+                cosine_sim = 0
+                
+            similarities.append((cosine_sim, other_word))
+    
+    # Sort by similarity (descending)
+    similarities.sort(reverse=True)
+    
+    print(f"\nWords most similar to '{word}':")
+    for i, (sim, similar_word) in enumerate(similarities[:top_k]):
+        print(f"{i+1}. {similar_word} (similarity: {sim:.3f})")
+
+def test_analogy(model, vocab, idx_to_word, a, b, c, top_k=3):
+    """Test analogy: a is to b as c is to ?"""
+    if not all(word in vocab for word in [a, b, c]):
+        return "Some words not in vocabulary"
+    
+    # Get embeddings
+    vec_a = model.W1[vocab[a], :]
+    vec_b = model.W1[vocab[b], :]  
+    vec_c = model.W1[vocab[c], :]
+    
+    # Vector arithmetic: king - man + woman ≈ queen
+    target_vec = vec_b - vec_a + vec_c
+    
+    # Find closest word to target vector
+    similarities = []
+    for word, idx in vocab.items():
+        if word not in [a, b, c]:  # Exclude input words
+            word_vec = model.W1[idx, :]
+            
+            norm_target = np.linalg.norm(target_vec)
+            norm_word = np.linalg.norm(word_vec)
+            
+            if norm_target > 0 and norm_word > 0:
+                similarity = np.dot(target_vec, word_vec) / (norm_target * norm_word)
+            else:
+                similarity = 0
+                
+            similarities.append((similarity, word))
+    
+    similarities.sort(reverse=True)
+    
+    print(f"\n'{a}' is to '{b}' as '{c}' is to:")
+    for i, (sim, word) in enumerate(similarities[:top_k]):
+        print(f"{i+1}. {word} (similarity: {sim:.3f})")
+
+def visualize_embeddings(model, vocab, idx_to_word, words_to_show=20):
+    """Visualize embeddings in 2D using PCA"""
+    
+    # Get embeddings for most frequent words
+    embeddings = []
+    labels = []
+    
+    for i, word in enumerate(idx_to_word.values()):
+        if i < words_to_show:
+            embeddings.append(model.W1[i, :])
+            labels.append(word)
+    
+    embeddings = np.array(embeddings)
+    
+    # Reduce to 2D
+    pca = PCA(n_components=2)
+    embeddings_2d = pca.fit_transform(embeddings)
+    
+    # Plot
+    plt.figure(figsize=(12, 8))
+    plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], alpha=0.7, s=100)
+    
+    for i, label in enumerate(labels):
+        plt.annotate(label, (embeddings_2d[i, 0], embeddings_2d[i, 1]), 
+                    xytext=(5, 5), textcoords='offset points', fontsize=10)
+    
+    plt.title("Word2Vec Embeddings (2D PCA)")
+    plt.xlabel("First Principal Component")
+    plt.ylabel("Second Principal Component")
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
+def print_embedding(model, word, vocab):
+    """Print the raw embedding vector for a word"""
+    if word not in vocab:
+        print(f"Word '{word}' not in vocabulary")
+        return
+    
+    word_idx = vocab[word]
+    embedding = model.W1[word_idx, :]
+    
+    print(f"\nEmbedding for '{word}':")
+    print(f"Shape: {embedding.shape}")
+    print(f"Values: {embedding}")
+    print(f"Norm: {np.linalg.norm(embedding):.4f}")
+
+def print_all_embeddings(model, vocab, idx_to_word, max_words=10):
+    """Print embeddings for multiple words"""
+    print("\n" + "="*60)
+    print("WORD EMBEDDINGS")
+    print("="*60)
+    
+    count = 0
+    for idx, word in idx_to_word.items():
+        if count >= max_words:
+            break
+        print_embedding(model, word, vocab)
+        count += 1
+
+def compare_embeddings(model, vocab, word1, word2):
+    """Compare two word embeddings"""
+    if word1 not in vocab or word2 not in vocab:
+        print("One or both words not in vocabulary")
+        return
+    
+    emb1 = model.W1[vocab[word1], :]
+    emb2 = model.W1[vocab[word2], :]
+    
+    # Calculate similarity
+    norm1 = np.linalg.norm(emb1)
+    norm2 = np.linalg.norm(emb2)
+    
+    if norm1 > 0 and norm2 > 0:
+        similarity = np.dot(emb1, emb2) / (norm1 * norm2)
+    else:
+        similarity = 0
+    
+    print(f"\nComparing '{word1}' and '{word2}':")
+    print(f"'{word1}' embedding: {emb1}")
+    print(f"'{word2}' embedding: {emb2}")
+    print(f"Cosine similarity: {similarity:.4f}")
+    print(f"Euclidean distance: {np.linalg.norm(emb1 - emb2):.4f}")
+
+# Example usage and testing
 if __name__ == "__main__":
-    # Simple example sentences
-    sentences = [
-        ["the", "cat", "sits", "on", "the", "mat"],
-        ["the", "dog", "runs", "in", "the", "park"],
-        ["cats", "and", "dogs", "are", "animals"],
-        ["paris", "is", "the", "capital", "of", "france"],
-        ["berlin", "is", "the", "capital", "of", "germany"],
-        ["rome", "is", "the", "capital", "of", "italy"],
-        ["the", "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog"],
-        ["man", "is", "to", "king", "as", "woman", "is", "to", "queen"],
-        ["apple", "is", "a", "fruit", "and", "carrot", "is", "a", "vegetable"],
-        ["computers", "can", "run", "programs", "and", "process", "data"]
+    # Sample text corpus
+    sample_text = """
+    The king and the queen ruled the kingdom.  
+The prince and the princess were the children of the royal family.  
+A man and a woman walked through the village where the farmers lived.  
+The capital of France is Paris. The capital of Germany is Berlin.  
+Paris is known for fashion, art, and culture. Berlin is famous for history and architecture.  
+The dog barked at the cat, while the horse galloped across the field.  
+The teacher taught students in the classroom. The professor lectured at the university.  
+Apples and oranges are fruits. Carrots and potatoes are vegetables.  
+The sun rises in the east and sets in the west.  
+Music brings joy to people, while silence brings peace to the mind.  
+
+    """
+    
+    print("Training Word2Vec model...")
+    
+    # Train the model with reduced parameters for small vocabulary
+    model, vocab, idx_to_word = train_word2vec(
+        sample_text,
+        embedding_dim=20,  # Smaller embedding for small vocab
+        window_size=3, 
+        epochs=200,
+        learning_rate=0.011,  # Reduced learning rate
+        negative_samples=3  # Fewer negative samples for small vocab
+    )
+    
+    print("\n" + "="*50)
+    print("TESTING RESULTS")
+    print("="*50)
+    
+    # Test similarity
+    test_words = ['king', 'paris', 'teacher', 'dog', 'sun']
+    for word in test_words:
+        if word in vocab:
+            find_similar_words(model, word, vocab, idx_to_word)
+    
+    # Test analogies
+    print("\n" + "="*30)
+    print("ANALOGY TESTS")
+    print("="*30)
+    
+    analogies = [
+        ('king', 'queen', 'man'),         # man is to woman as king is to queen
+        ('paris', 'france', 'berlin'),    # berlin is to germany as paris is to france
+        ('teacher', 'classroom', 'professor'),  # professor is to university as teacher is to classroom
+        ('apples', 'fruits', 'carrots'),  # carrots are to vegetables as apples are to fruits
+        ('dog', 'cat', 'horse')           # horse is to field as dog is to cat
     ]
     
-    # Create and train the model
-    try:
-        model = Word2Vec(sentences, 
-                         embedding_dim=50,  # Higher dimension for better results
-                         window_size=2, 
-                         learning_rate=0.05, 
-                         epochs=200, 
-                         neg_samples=3)
-        model.train()
-        
-        # Find similar words
-        print("\nWords similar to 'cat':")
-        similar_words = model.find_similar('cat', n=3)
-        for word, similarity in similar_words:
-            print(f"{word}: {similarity:.4f}")
-        
-        # Test analogy
-        print("\nAnalogy test: 'king - man + woman = ?'")
-        analogies = model.analogy('king', 'man', 'woman', n=3)
-        for word, similarity in analogies:
-            print(f"{word}: {similarity:.4f}")
-        
-        # Visualize embeddings - use a smaller number for a small dataset
-        try:
-            # Get actual vocab size to determine proper visualization count
-            viz_count = min(30, len(model.word_to_idx))
-            model.visualize_embeddings(n=viz_count)
-        except Exception as e:
-            print(f"Visualization error: {e}")
-            print("Skipping visualization...")
-        
-        # Demonstrate a complete example for the pair ("cat", "sits")
-        print("\nDetailed example for pair ('cat', 'sits'):")
-        # Get indices and vectors
-        cat_idx = model.word_to_idx['cat']
-        sits_idx = model.word_to_idx['sits']
-        
-        # Get embeddings
-        cat_embed = model.W[cat_idx]
-        sits_embed = model.W_prime[sits_idx]
-        
-        # Compute dot product and sigmoid
-        dot_product = np.dot(cat_embed, sits_embed)
-        sigmoid_value = model._sigmoid(dot_product)
-        
-        print(f"Target word: 'cat', Context word: 'sits'")
-        print(f"cat embedding (first 5 dims): {cat_embed[:5]}")
-        print(f"sits embedding (first 5 dims): {sits_embed[:5]}")
-        print(f"Dot product: {dot_product:.4f}")
-        print(f"Sigmoid value: {sigmoid_value:.4f}")
-        print(f"Probability of 'sits' given 'cat': {sigmoid_value:.4f}")
-        
-        # Generate negative samples
-        neg_samples = model._sample_negative(sits_idx, 3)
-        neg_words = [model.idx_to_word[idx] for idx in neg_samples]
-        print(f"Negative samples: {neg_words}")
-        
-        # Compute loss
-        loss_pos = -np.log(sigmoid_value)
-        print(f"Loss for positive sample: {loss_pos:.4f}")
-        
-    except Exception as e:
-        print(f"Error running Word2Vec example: {e}")
+    for a, b, c in analogies:
+        if all(word in vocab for word in [a, b, c]):
+            test_analogy(model, vocab, idx_to_word, a, b, c)
+    
+    # Print vocabulary for reference
+    print(f"\nVocabulary ({len(vocab)} words):")
+    print(list(vocab.keys()))
+    
+    # Print some raw embeddings
+    print_all_embeddings(model, vocab, idx_to_word, max_words=5)
+    
+    # Compare specific word pairs
+    print("\n" + "="*30)
+    print("EMBEDDING COMPARISONS")
+    print("="*30)
+    compare_embeddings(model, vocab, 'cat', 'dog')
+    compare_embeddings(model, vocab, 'king', 'queen')
+    
+    # Visualize embeddings (uncomment to see the plot)
+    visualize_embeddings(model, vocab, idx_to_word, words_to_show=15)
