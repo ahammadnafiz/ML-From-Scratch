@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GloVe Function F Visualization</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+        }
+        
+        h1 {
+            text-align: center;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            background: linear-gradient(45deg, #FFD700, #FFA500);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .subtitle {
+            text-align: center;
+            font-size: 1.2em;
+            margin-bottom: 30px;
+            opacity: 0.9;
+        }
+        
+        .visualization-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+        
+        .plot-container {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 15px;
+            padding: 20px;
+            backdrop-filter: blur(5px);
+        }
+        
+        .plot-title {
+            font-size: 1.3em;
+            font-weight: bold;
+            margin-bottom: 15px;
+            text-align: center;
+            color: #FFD700;
+        }
+        
+        .controls {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .control-group {
+            margin-bottom: 15px;
+        }
+        
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+        
+        .control-group input[type="range"] {
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        
+        .control-group select {
+            width: 100%;
+            padding: 8px;
+            border-radius: 8px;
+            border: none;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            font-size: 14px;
+        }
+        
+        .control-group select option {
+            background: #4a4a4a;
+            color: white;
+        }
+        
+        .equation-display {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            text-align: center;
+            font-size: 1.1em;
+        }
+        
+        .math {
+            font-family: 'Times New Roman', serif;
+            font-style: italic;
+            color: #FFD700;
+        }
+        
+        .explanation {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        
+        .step {
+            margin-bottom: 15px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            border-left: 4px solid #FFD700;
+        }
+        
+        .step-title {
+            font-weight: bold;
+            color: #FFD700;
+            margin-bottom: 8px;
+        }
+        
+        canvas {
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.9);
+        }
+        
+        .value-display {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 10px 15px;
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+        
+        .value-label {
+            font-weight: 500;
+        }
+        
+        .value-number {
+            font-family: monospace;
+            color: #FFD700;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>GloVe Function F: Geometric Intuition</h1>
+        <p class="subtitle">Interactive visualization of how word vector differences encode semantic relationships</p>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label>Context Word Example:</label>
+                <select id="contextSelect">
+                    <option value="solid">solid (distinguishes ice vs steam)</option>
+                    <option value="hot">hot (distinguishes fire vs ice)</option>
+                    <option value="royal">royal (distinguishes king vs queen)</option>
+                    <option value="animal">animal (distinguishes cat vs dog)</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label>Animation Speed: <span id="speedValue">1.0x</span></label>
+                <input type="range" id="speedSlider" min="0.1" max="3.0" step="0.1" value="1.0">
+            </div>
+            
+            <div class="control-group">
+                <label>Show Components:</label>
+                <input type="checkbox" id="showVectors" checked> Word Vectors
+                <input type="checkbox" id="showDifference" checked> Vector Difference
+                <input type="checkbox" id="showProjection" checked> Projection
+            </div>
+        </div>
+        
+        <div class="equation-display">
+            <div class="math">F(w<sub>i</sub> - w<sub>j</sub>, w̃<sub>k</sub>) = P<sub>ik</sub> / P<sub>jk</sub></div>
+            <div style="margin-top: 10px; font-size: 0.9em;">
+                The function F maps vector differences to probability ratios
+            </div>
+        </div>
+        
+        <div class="visualization-container">
+            <div class="plot-container">
+                <div class="plot-title">2D Vector Space</div>
+                <canvas id="vectorCanvas" width="400" height="400"></canvas>
+                <div class="value-display">
+                    <span class="value-label">Dot Product:</span>
+                    <span class="value-number" id="dotProductValue">0.00</span>
+                </div>
+            </div>
+            
+            <div class="plot-container">
+                <div class="plot-title">Probability Ratios Over Time</div>
+                <canvas id="ratioCanvas" width="400" height="400"></canvas>
+                <div class="value-display">
+                    <span class="value-label">Current Ratio:</span>
+                    <span class="value-number" id="ratioValue">1.00</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="explanation">
+            <div class="step">
+                <div class="step-title">Step 1: Word Vectors Encode Meaning</div>
+                Two similar words (like "ice" and "steam") have vectors pointing in similar directions, but context words help distinguish them.
+            </div>
+            
+            <div class="step">
+                <div class="step-title">Step 2: Vector Difference Captures Contrast</div>
+                <span class="math">w<sub>i</sub> - w<sub>j</sub></span> gives us a vector that points from one word to another, encoding their semantic difference.
+            </div>
+            
+            <div class="step">
+                <div class="step-title">Step 3: Context Vector Measures Relevance</div>
+                The dot product <span class="math">(w<sub>i</sub> - w<sub>j</sub>)<sup>T</sup> w̃<sub>k</sub></span> tells us how much the context word <span class="math">k</span> helps distinguish between words <span class="math">i</span> and <span class="math">j</span>.
+            </div>
+            
+            <div class="step">
+                <div class="step-title">Step 4: Ratios Reflect Co-occurrence</div>
+                If "solid" appears more with "ice" than "steam", the ratio <span class="math">P<sub>ik</sub>/P<sub>jk</sub> > 1</span>, and the dot product should be positive.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Get canvas contexts
+        const vectorCanvas = document.getElementById('vectorCanvas');
+        const vectorCtx = vectorCanvas.getContext('2d');
+        const ratioCanvas = document.getElementById('ratioCanvas');
+        const ratioCtx = ratioCanvas.getContext('2d');
+        
+        // Animation variables
+        let animationId;
+        let time = 0;
+        let speed = 1.0;
+        
+        // Example word pairs and their properties
+        const examples = {
+            solid: {
+                word1: "ice", word2: "steam",
+                vec1: [0.8, 0.6], vec2: [0.3, 0.9],
+                context: [1.0, 0.2],
+                ratios: [3.2, 2.8, 3.5, 3.1, 2.9, 3.3, 3.0, 3.4]
+            },
+            hot: {
+                word1: "fire", word2: "ice",
+                vec1: [0.9, 0.4], vec2: [0.2, 0.8],
+                context: [0.8, -0.6],
+                ratios: [4.1, 3.8, 4.3, 4.0, 3.9, 4.2, 3.7, 4.1]
+            },
+            royal: {
+                word1: "king", word2: "queen",
+                vec1: [0.7, 0.7], vec2: [0.6, 0.8],
+                context: [0.9, -0.1],
+                ratios: [1.2, 1.3, 1.1, 1.4, 1.2, 1.3, 1.1, 1.2]
+            },
+            animal: {
+                word1: "cat", word2: "dog",
+                vec1: [0.5, 0.8], vec2: [0.6, 0.7],
+                context: [0.3, 0.9],
+                ratios: [0.8, 0.9, 0.7, 0.8, 0.9, 0.8, 0.7, 0.9]
+            }
+        };
+        
+        let currentExample = examples.solid;
+        let ratioHistory = [];
+        
+        // Event listeners
+        document.getElementById('contextSelect').addEventListener('change', (e) => {
+            currentExample = examples[e.target.value];
+            ratioHistory = [];
+        });
+        
+        document.getElementById('speedSlider').addEventListener('input', (e) => {
+            speed = parseFloat(e.target.value);
+            document.getElementById('speedValue').textContent = speed.toFixed(1) + 'x';
+        });
+        
+        // Utility functions
+        function drawVector(ctx, start, end, color, label, width = 2) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
+            ctx.beginPath();
+            ctx.moveTo(start[0], start[1]);
+            ctx.lineTo(end[0], end[1]);
+            ctx.stroke();
+            
+            // Arrow head
+            const angle = Math.atan2(end[1] - start[1], end[0] - start[0]);
+            const headLength = 10;
+            ctx.beginPath();
+            ctx.moveTo(end[0], end[1]);
+            ctx.lineTo(end[0] - headLength * Math.cos(angle - Math.PI/6), 
+                      end[1] - headLength * Math.sin(angle - Math.PI/6));
+            ctx.moveTo(end[0], end[1]);
+            ctx.lineTo(end[0] - headLength * Math.cos(angle + Math.PI/6), 
+                      end[1] - headLength * Math.sin(angle + Math.PI/6));
+            ctx.stroke();
+            
+            // Label
+            if (label) {
+                ctx.fillStyle = color;
+                ctx.font = '14px Arial';
+                ctx.fillText(label, end[0] + 5, end[1] - 5);
+            }
+        }
+        
+        function drawVectorSpace() {
+            vectorCtx.clearRect(0, 0, vectorCanvas.width, vectorCanvas.height);
+            
+            const centerX = vectorCanvas.width / 2;
+            const centerY = vectorCanvas.height / 2;
+            const scale = 150;
+            
+            // Draw grid
+            vectorCtx.strokeStyle = '#e0e0e0';
+            vectorCtx.lineWidth = 0.5;
+            for (let i = -2; i <= 2; i++) {
+                if (i !== 0) {
+                    vectorCtx.beginPath();
+                    vectorCtx.moveTo(centerX + i * scale/2, 50);
+                    vectorCtx.lineTo(centerX + i * scale/2, vectorCanvas.height - 50);
+                    vectorCtx.stroke();
+                    
+                    vectorCtx.beginPath();
+                    vectorCtx.moveTo(50, centerY + i * scale/2);
+                    vectorCtx.lineTo(vectorCanvas.width - 50, centerY + i * scale/2);
+                    vectorCtx.stroke();
+                }
+            }
+            
+            // Draw axes
+            vectorCtx.strokeStyle = '#888';
+            vectorCtx.lineWidth = 1;
+            vectorCtx.beginPath();
+            vectorCtx.moveTo(50, centerY);
+            vectorCtx.lineTo(vectorCanvas.width - 50, centerY);
+            vectorCtx.stroke();
+            
+            vectorCtx.beginPath();
+            vectorCtx.moveTo(centerX, 50);
+            vectorCtx.lineTo(centerX, vectorCanvas.height - 50);
+            vectorCtx.stroke();
+            
+            // Animate vectors with rotation
+            const rotationAngle = time * 0.02 * speed;
+            const cos = Math.cos(rotationAngle);
+            const sin = Math.sin(rotationAngle);
+            
+            // Rotate vectors
+            const vec1 = [
+                currentExample.vec1[0] * cos - currentExample.vec1[1] * sin,
+                currentExample.vec1[0] * sin + currentExample.vec1[1] * cos
+            ];
+            const vec2 = [
+                currentExample.vec2[0] * cos - currentExample.vec2[1] * sin,
+                currentExample.vec2[0] * sin + currentExample.vec2[1] * cos
+            ];
+            
+            // Context vector (less rotation)
+            const contextRotation = rotationAngle * 0.3;
+            const contextCos = Math.cos(contextRotation);
+            const contextSin = Math.sin(contextRotation);
+            const contextVec = [
+                currentExample.context[0] * contextCos - currentExample.context[1] * contextSin,
+                currentExample.context[0] * contextSin + currentExample.context[1] * contextCos
+            ];
+            
+            const showVectors = document.getElementById('showVectors').checked;
+            const showDifference = document.getElementById('showDifference').checked;
+            const showProjection = document.getElementById('showProjection').checked;
+            
+            if (showVectors) {
+                // Draw word vectors
+                drawVector(vectorCtx, 
+                    [centerX, centerY], 
+                    [centerX + vec1[0] * scale, centerY - vec1[1] * scale], 
+                    '#ff6b6b', `w_${currentExample.word1}`, 3);
+                
+                drawVector(vectorCtx, 
+                    [centerX, centerY], 
+                    [centerX + vec2[0] * scale, centerY - vec2[1] * scale], 
+                    '#4ecdc4', `w_${currentExample.word2}`, 3);
+            }
+            
+            // Draw context vector
+            drawVector(vectorCtx, 
+                [centerX, centerY], 
+                [centerX + contextVec[0] * scale, centerY - contextVec[1] * scale], 
+                '#45b7d1', 'w̃_context', 3);
+            
+            if (showDifference) {
+                // Draw difference vector
+                const diff = [vec1[0] - vec2[0], vec1[1] - vec2[1]];
+                drawVector(vectorCtx, 
+                    [centerX + vec2[0] * scale, centerY - vec2[1] * scale], 
+                    [centerX + vec1[0] * scale, centerY - vec1[1] * scale], 
+                    '#f39c12', 'w_i - w_j', 2);
+            }
+            
+            if (showProjection) {
+                // Draw projection
+                const diff = [vec1[0] - vec2[0], vec1[1] - vec2[1]];
+                const dotProduct = diff[0] * contextVec[0] + diff[1] * contextVec[1];
+                const projLength = dotProduct / (contextVec[0] * contextVec[0] + contextVec[1] * contextVec[1]);
+                const proj = [contextVec[0] * projLength, contextVec[1] * projLength];
+                
+                vectorCtx.strokeStyle = '#e74c3c';
+                vectorCtx.lineWidth = 2;
+                vectorCtx.setLineDash([5, 5]);
+                vectorCtx.beginPath();
+                vectorCtx.moveTo(centerX, centerY);
+                vectorCtx.lineTo(centerX + proj[0] * scale, centerY - proj[1] * scale);
+                vectorCtx.stroke();
+                vectorCtx.setLineDash([]);
+                
+                // Update dot product display
+                document.getElementById('dotProductValue').textContent = dotProduct.toFixed(2);
+            }
+        }
+        
+        function drawRatioPlot() {
+            ratioCtx.clearRect(0, 0, ratioCanvas.width, ratioCanvas.height);
+            
+            const padding = 50;
+            const plotWidth = ratioCanvas.width - 2 * padding;
+            const plotHeight = ratioCanvas.height - 2 * padding;
+            
+            // Draw axes
+            ratioCtx.strokeStyle = '#888';
+            ratioCtx.lineWidth = 1;
+            ratioCtx.beginPath();
+            ratioCtx.moveTo(padding, padding);
+            ratioCtx.lineTo(padding, ratioCanvas.height - padding);
+            ratioCtx.lineTo(ratioCanvas.width - padding, ratioCanvas.height - padding);
+            ratioCtx.stroke();
+            
+            // Add current ratio to history
+            const currentRatioIndex = Math.floor(time * 0.1 * speed) % currentExample.ratios.length;
+            const currentRatio = currentExample.ratios[currentRatioIndex];
+            
+            if (ratioHistory.length > 100) {
+                ratioHistory.shift();
+            }
+            ratioHistory.push(currentRatio);
+            
+            // Draw ratio line
+            if (ratioHistory.length > 1) {
+                ratioCtx.strokeStyle = '#ff6b6b';
+                ratioCtx.lineWidth = 2;
+                ratioCtx.beginPath();
+                
+                for (let i = 0; i < ratioHistory.length; i++) {
+                    const x = padding + (i / (ratioHistory.length - 1)) * plotWidth;
+                    const y = ratioCanvas.height - padding - (ratioHistory[i] / 5) * plotHeight;
+                    
+                    if (i === 0) {
+                        ratioCtx.moveTo(x, y);
+                    } else {
+                        ratioCtx.lineTo(x, y);
+                    }
+                }
+                ratioCtx.stroke();
+            }
+            
+            // Draw reference line at ratio = 1
+            ratioCtx.strokeStyle = '#666';
+            ratioCtx.lineWidth = 1;
+            ratioCtx.setLineDash([3, 3]);
+            const y1 = ratioCanvas.height - padding - (1 / 5) * plotHeight;
+            ratioCtx.beginPath();
+            ratioCtx.moveTo(padding, y1);
+            ratioCtx.lineTo(ratioCanvas.width - padding, y1);
+            ratioCtx.stroke();
+            ratioCtx.setLineDash([]);
+            
+            // Labels
+            ratioCtx.fillStyle = '#333';
+            ratioCtx.font = '12px Arial';
+            ratioCtx.fillText('P_ik / P_jk = 1', padding + 5, y1 - 5);
+            
+            // Update ratio display
+            document.getElementById('ratioValue').textContent = currentRatio.toFixed(2);
+        }
+        
+        function animate() {
+            time += 1;
+            
+            drawVectorSpace();
+            drawRatioPlot();
+            
+            animationId = requestAnimationFrame(animate);
+        }
+        
+        // Start animation
+        animate();
+    </script>
+</body>
+</html>

@@ -3,14 +3,19 @@ from collections import defaultdict
 from math import log
 
 # Toy vocab
-vocab = ["the", "cat", "sat"]
+vocab = ['I', 'like', 'enjoy', 'deep', 'learning', 'nlp', 'flying']
 word2idx = {w: i for i, w in enumerate(vocab)}
 
 # Co-occurrence matrix (from manual counts)
 X = np.array([
-    [0, 1, 0],
-    [1, 0, 1],
-    [0, 1, 0]
+    [0, 2, 1, 0, 0, 0, 0, 0],
+    [2, 0, 0, 1, 0, 1, 0, 0],
+    [1, 0, 0, 0, 0, 0, 1, 0],
+    [0, 1, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0, 1],
+    [0, 1, 0, 0, 0, 0, 0, 1],
+    [0, 0, 1, 0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 1, 1, 1, 0]
 ])
 
 # Hyperparameters
@@ -25,6 +30,14 @@ W = np.random.randn(V, embedding_dim)
 W_tilde = np.random.randn(V, embedding_dim)
 b = np.zeros(V)
 b_tilde = np.zeros(V)
+
+def cosine_similarity(v1, v2):
+    dot_product = np.dot(v1, v2)
+    norm_v1 = np.linalg.norm(v1)
+    norm_v2 = np.linalg.norm(v2)
+    if norm_v1 == 0 or norm_v2 == 0:
+        return 0
+    return dot_product / (norm_v1 * norm_v2)
 
 def f(x):
     return (x / x_max) ** alpha if x < x_max else 1
@@ -58,3 +71,5 @@ final_embeddings = {word: final_vecs[word2idx[word]] for word in vocab}
 print("Final embeddings:")
 for word, vec in final_embeddings.items():
     print(f"{word}: {vec}")
+    
+print(cosine_similarity(final_embeddings['deep'], final_embeddings['I']))
