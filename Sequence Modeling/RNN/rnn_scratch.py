@@ -1,11 +1,31 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+# Read and preprocess text data
+def load_text_data(filename):
+    """Load text data and create character mappings"""
+    with open(filename, 'r', encoding='utf-8') as f:
+        text = f.read()
+    
+    # Get unique characters and create mappings
+    chars = sorted(list(set(text)))
+    char_to_idx = {ch: i for i, ch in enumerate(chars)}
+    idx_to_char = {i: ch for i, ch in enumerate(chars)}
+    
+    print(f"Text length: {len(text)} characters")
+    print(f"Vocabulary size: {len(chars)} unique characters")
+    print(f"First 10 characters: {chars[:10]}")
+    
+    return text, chars, char_to_idx, idx_to_char
+
+# Load the text data
+text, chars, char_to_idx, idx_to_char = load_text_data('input.txt')
+
 # Dimensions
-n_x = 4  # Input size
-n_h = 5  # Hidden layer size
-n_y = 3  # Output size
-T = 3    # Number of time steps
+n_x = len(chars)  # Input size (vocabulary size)
+n_h = 50          # Hidden layer size (reduced for faster training)
+n_y = len(chars)  # Output size (vocabulary size)
+T = 15            # Sequence length for training (reduced for faster training)
 
 # Random seed for reproducibility
 np.random.seed(0)
@@ -165,41 +185,40 @@ def predict(X):
     predictions = [np.argmax(y_hat[t]) for t in range(len(X))]
     return predictions
 
-# Generate toy data examples
-def generate_toy_data(num_samples, sequence_length=T):
+# Generate character-level training data
+def generate_char_data(text, char_to_idx, sequence_length=T):
     """
-    Generate toy data for training and testing
-    Simple pattern: Sum of inputs determines the class
+    Generate character-level training sequences from text
+    Each sequence predicts the next character
     """
     X_data = []
     Y_data = []
     
-    for _ in range(num_samples):
-        # Create a random sequence
-        sequence = [np.random.randn(n_x) for _ in range(sequence_length)]
-        X_data.append(sequence)
+    # Create sequences of length T
+    for i in range(0, len(text) - sequence_length, sequence_length):
+        # Input sequence
+        input_seq = text[i:i + sequence_length]
+        # Target sequence (shifted by 1)
+        target_seq = text[i + 1:i + sequence_length + 1]
         
-        # Create target labels (example rule: sum of inputs determines class)
-        targets = []
-        for t in range(sequence_length):
-            # Classification rule:
-            # Sum of input values > 0.5 => class 0
-            # Sum of input values < -0.5 => class 1
-            # Otherwise => class 2
-            input_sum = np.sum(sequence[t])
-            if input_sum > 0.5:
-                target = 0
-            elif input_sum < -0.5:
-                target = 1
-            else:
-                target = 2
-                
-            # One-hot encode the target: [1,0,0] for class 0, [0,1,0] for class 1, [0,0,1] for class 2
-            one_hot = np.zeros(n_y)
-            one_hot[target] = 1
-            targets.append(one_hot)
-            
-        Y_data.append(targets)
+        # Convert to one-hot encoding
+        X_seq = []
+        Y_seq = []
+        
+        for char in input_seq:
+            # One-hot encode input character
+            one_hot_input = np.zeros(n_x)
+            one_hot_input[char_to_idx[char]] = 1
+            X_seq.append(one_hot_input)
+        
+        for char in target_seq:
+            # One-hot encode target character
+            one_hot_target = np.zeros(n_y)
+            one_hot_target[char_to_idx[char]] = 1
+            Y_seq.append(one_hot_target)
+        
+        X_data.append(X_seq)
+        Y_data.append(Y_seq)
     
     return X_data, Y_data
 
@@ -236,16 +255,70 @@ def train_rnn(X_data, Y_data, num_epochs=100, learning_rate=0.01):
     
     return losses
 
-# Evaluate the model
-def evaluate_model(X_test, Y_test):
+def generate_text(seed_text, length=100, temperature=1.0):
     """
-    Evaluate the model's performance
-    Accuracy = (Number of correct predictions) / (Total number of predictions)
+    Generate text using the trained RNN model
+    
+    Args:
+        seed_text: Starting text to prime the generation
+        length: Number of characters to generate
+        temperature: Controls randomness (lower = more conservative, higher = more random)
+    """
+    # Convert seed text to indices
+    generated = seed_text
+    
+    # Initialize hidden state
+    h = np.zeros((n_h, 1))
+    
+    # Process seed text to warm up the hidden state
+    for char in seed_text:
+        if char in char_to_idx:
+            x = np.zeros((n_x, 1))
+            x[char_to_idx[char], 0] = 1
+            
+            # Forward pass
+            a = np.dot(W_hx, x) + np.dot(W_hh, h) + b_h
+            h = np.tanh(a)
+    
+    # Generate new characters
+    for _ in range(length):
+        # Get last character
+        last_char = generated[-1] if generated else ' '
+        
+        if last_char in char_to_idx:
+            x = np.zeros((n_x, 1))
+            x[char_to_idx[last_char], 0] = 1
+            
+            # Forward pass
+            a = np.dot(W_hx, x) + np.dot(W_hh, h) + b_h
+            h = np.tanh(a)
+            z = np.dot(W_yh, h) + b_y
+            
+            # Apply temperature scaling
+            z = z / temperature
+            y_hat = softmax(z)
+            
+            # Sample from the probability distribution
+            probabilities = y_hat.flatten()
+            char_idx = np.random.choice(len(chars), p=probabilities)
+            next_char = idx_to_char[char_idx]
+            
+            generated += next_char
+        else:
+            # If character not in vocabulary, add a space
+            generated += ' '
+    
+    return generated
+
+# Evaluate the model for text generation
+def evaluate_text_model(X_test, Y_test):
+    """
+    Evaluate the model's performance on character prediction
     """
     correct = 0
     total = 0
     
-    for i in range(len(X_test)):
+    for i in range(min(len(X_test), 50)):  # Evaluate on subset for speed
         X = X_test[i]
         Y = Y_test[i]
         
@@ -262,43 +335,65 @@ def evaluate_model(X_test, Y_test):
             total += 1
     
     # Accuracy = correct / total
-    accuracy = correct / total
+    accuracy = correct / total if total > 0 else 0
     return accuracy
 
 # Run the example
 if __name__ == "__main__":
-    print("Generating toy data...")
-    num_samples = 100
-    X_train, Y_train = generate_toy_data(num_samples)
-    X_test, Y_test = generate_toy_data(20)
+    print("Generating character-level training data...")
+    
+    # Split text into train and test
+    split_idx = int(0.9 * len(text))
+    train_text = text[:split_idx]
+    test_text = text[split_idx:]
+    
+    # Generate training and test data
+    X_train, Y_train = generate_char_data(train_text, char_to_idx)
+    X_test, Y_test = generate_char_data(test_text, char_to_idx)
+    
+    print(f"Training sequences: {len(X_train)}")
+    print(f"Test sequences: {len(X_test)}")
     
     print("Training RNN model...")
-    losses = train_rnn(X_train, Y_train, num_epochs=100, learning_rate=0.01)
+    losses = train_rnn(X_train, Y_train, num_epochs=50, learning_rate=0.001)
     
     # Plot training loss
     plt.figure(figsize=(10, 6))
     plt.plot(losses)
-    plt.title('Training Loss')
+    plt.title('Training Loss (Character-Level Text Generation)')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.grid(True)
-    plt.savefig('rnn_training_loss.png')
+    plt.savefig('rnn_text_training_loss.png')
     plt.close()
     
     # Evaluate on test data
-    accuracy = evaluate_model(X_test, Y_test)
+    accuracy = evaluate_text_model(X_test, Y_test)
     print(f"Test Accuracy: {accuracy:.4f}")
     
-    # Run a single example to demonstrate prediction
-    sample_X = X_test[0]
-    sample_Y = Y_test[0]
+    # Generate sample text
+    print("\nGenerating sample text...")
+    seed_texts = ["The ", "When ", "From "]
     
-    predictions = predict(sample_X)
-    true_labels = [np.argmax(sample_Y[t]) for t in range(len(sample_Y))]
+    for seed in seed_texts:
+        print(f"\nSeed: '{seed}'")
+        generated = generate_text(seed, length=200, temperature=0.8)
+        print(f"Generated: {generated}")
+        print("-" * 80)
     
-    print("\nSample Prediction Example:")
-    for t in range(len(predictions)):
-        print(f"Time step {t}:")
-        print(f"  Input: {sample_X[t]}")
-        print(f"  Predicted class: {predictions[t]}")
-        print(f"  True class: {true_labels[t]}")
+    # Show a prediction example
+    if len(X_test) > 0:
+        sample_X = X_test[0]
+        sample_Y = Y_test[0]
+        
+        predictions = predict(sample_X)
+        true_labels = [np.argmax(sample_Y[t]) for t in range(len(sample_Y))]
+        
+        print("\nSample Character Prediction Example:")
+        input_chars = [idx_to_char[np.argmax(sample_X[t])] for t in range(len(sample_X))]
+        predicted_chars = [idx_to_char[predictions[t]] for t in range(len(predictions))]
+        true_chars = [idx_to_char[true_labels[t]] for t in range(len(true_labels))]
+        
+        print(f"Input sequence: {''.join(input_chars)}")
+        print(f"Predicted next: {''.join(predicted_chars)}")
+        print(f"True next:      {''.join(true_chars)}")
