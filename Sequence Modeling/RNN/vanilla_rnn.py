@@ -5,7 +5,7 @@ BSD License
 import numpy as np
 
 # data I/O
-with open('data.txt', 'r', encoding='utf-8') as f:
+with open('eng-fra.txt', 'r', encoding='utf-8') as f:
     data = f.read() # should be simple plain text file
 chars = list(set(data))
 data_size, vocab_size = len(data), len(chars)

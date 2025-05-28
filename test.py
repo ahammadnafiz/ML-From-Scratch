@@ -478,7 +478,7 @@ if __name__ == "__main__":
     print(f"Test sequences: {len(X_test)}")
     
     print("Training RNN model...")
-    losses = train_rnn(X_train, Y_train, num_epochs=50, learning_rate=0.001)
+    losses = train_rnn(X_train, Y_train, num_epochs=500, learning_rate=0.001)
     
     # Plot training loss
     plt.figure(figsize=(10, 6))
