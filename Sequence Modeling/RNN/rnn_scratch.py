@@ -32,8 +32,11 @@ def get_text_embeddings(text_chunks):
         embeddings = embedding_model.encode(text_chunks, convert_to_numpy=True)
     return embeddings
 
-# Load the text data
-text, chars, char_to_idx, idx_to_char = load_text_data('eng-fra.txt')
+# Load the text data - use absolute path to ensure file is found
+import os
+script_dir = os.path.dirname(os.path.abspath(__file__))
+text_file_path = os.path.join(script_dir, 'eng-fra.txt')
+text, chars, char_to_idx, idx_to_char = load_text_data(text_file_path)
 
 # Dimensions
 n_x = embedding_dim   # Input size (embedding dimension instead of vocabulary size)
