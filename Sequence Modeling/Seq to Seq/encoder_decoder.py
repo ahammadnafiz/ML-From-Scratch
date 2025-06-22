@@ -852,35 +852,3 @@ if __name__ == "__main__":
         eval_i = model.evaluate_model(X_i, Y_i, targets_i)
         print(f"  Dataset {i+1}: SeqLen={seq_len}, TargetLen={target_len}, "
               f"Loss={eval_i['loss']:.4f}, Acc={eval_i['accuracy']:.4f}")
-    
-    # 9. Summary of all methods used
-    print(f"\n9. METHODS UTILIZATION SUMMARY:")
-    print("-" * 50)
-    
-    print("✓ ALL methods have been demonstrated:")
-    print("  Core methods:")
-    print("    • encoder_forward() - Used in training and evaluation")
-    print("    • decoder_forward() - Used in training and evaluation") 
-    print("    • compute_loss() - Used in training steps")
-    print("    • backward() - Used in training steps")
-    print("    • adam_update() - Used in training steps")
-    print("    • train_step() - Used in training loop")
-    print("    • predict() - Used for sequence generation")
-    print("    • check_gradients() - Used for gradient validation")
-    print("    • clip_gradients() - Used for gradient stability")
-    print("")
-    print("  Previously unused methods:")
-    print("    • lr_schedule() - Used for adaptive learning rates")
-    print("    • generate_structured_data() - Used for data generation")
-    print("    • evaluate_model() - Used for comprehensive evaluation")
-    
-    print(f"\nFinal Statistics:")
-    print(f"  - Total epochs trained: {num_epochs}")
-    print(f"  - Final learning rate: {learning_rates[-1]:.6f}")
-    print(f"  - Adam optimizer steps: {model.t}")
-    print(f"  - Loss improvement: {((losses[0] - losses[-1]) / losses[0] * 100):.2f}%")
-    
-    print("\n" + "=" * 80)
-    print("GRU ENCODER-DECODER COMPREHENSIVE DEMONSTRATION COMPLETED!")
-    print("All methods including previously unused ones have been utilized.")
-    print("=" * 80)
