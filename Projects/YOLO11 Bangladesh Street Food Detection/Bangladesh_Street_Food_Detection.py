@@ -6,7 +6,7 @@
 # ============================================================================
 
 # Install required packages with YOLO11 support
-# !pip install ultralytics>=8.3.0 roboflow supervision wandb -q
+# !pip install ultralytics>=8.3.0 roboflow supervision wandb python-dotenv -q
 # !pip install torch torchvision torchaudio --index-url https://pytorch.org/whl/cu118 -q
 
 import os
@@ -21,6 +21,11 @@ from ultralytics import YOLO
 from roboflow import Roboflow
 import wandb
 from IPython.display import Image, display
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+print("✅ Environment variables loaded from .env file")
 
 # Check GPU availability and YOLO11 compatibility
 print(f"CUDA available: {torch.cuda.is_available()}")
@@ -39,11 +44,30 @@ except Exception as e:
 # SECTION 2: DATASET CONFIGURATION AND DOWNLOAD
 # ============================================================================
 
-# Configure your Roboflow project details
-RF_API_KEY = "YOUR_ROBOFLOW_API_KEY"  # Replace with your API key
-RF_WORKSPACE = "YOUR_WORKSPACE_NAME"  # Replace with your workspace
-RF_PROJECT = "YOUR_PROJECT_NAME"      # Replace with your project name
-RF_VERSION = 1                        # Replace with your dataset version
+# Load Roboflow credentials from environment variables
+RF_API_KEY = os.getenv('ROBOFLOW_API_KEY')
+RF_WORKSPACE = os.getenv('ROBOFLOW_WORKSPACE')
+RF_PROJECT = os.getenv('ROBOFLOW_PROJECT')
+RF_VERSION = int(os.getenv('ROBOFLOW_VERSION', 1))
+
+# Verify credentials are loaded
+if not RF_API_KEY:
+    print("❌ ROBOFLOW_API_KEY not found in .env file!")
+    print("Please check your .env file contains: ROBOFLOW_API_KEY=your_api_key")
+else:
+    print(f"✅ Roboflow API Key loaded: {RF_API_KEY[:8]}...")
+
+if not RF_WORKSPACE:
+    print("❌ ROBOFLOW_WORKSPACE not found in .env file!")
+else:
+    print(f"✅ Workspace: {RF_WORKSPACE}")
+
+if not RF_PROJECT:
+    print("❌ ROBOFLOW_PROJECT not found in .env file!")
+else:
+    print(f"✅ Project: {RF_PROJECT}")
+
+print(f"✅ Dataset Version: {RF_VERSION}")
 
 # ============================================================================
 # SELECT YOUR 3 CLASSES FROM 15 BANGLADESH STREET FOODS
@@ -53,11 +77,11 @@ RF_VERSION = 1                        # Replace with your dataset version
 #  'Papor Vaja', 'Vel Puri', 'Chopti', 'Fuska', 'Vorta', 'Murobba', 
 #  'Dim Cake', 'Halim', 'Muglai Parata']
 
-# SELECT YOUR 3 CLASSES HERE (modify as needed):
+# Load selected classes from environment variables (with fallback defaults)
 SELECTED_CLASSES = [
-    'Fuska',        # Popular street food - good for detection
-    'Singara',      # Distinct triangular shape
-    'Jhalmuri'      # Different texture and appearance
+    os.getenv('CLASS_1', 'Fuska'),        # Popular street food - good for detection
+    os.getenv('CLASS_2', 'Singara'),      # Distinct triangular shape
+    os.getenv('CLASS_3', 'Jhalmuri')      # Different texture and appearance
 ]
 
 print(f"Selected classes for training: {SELECTED_CLASSES}")
@@ -262,9 +286,9 @@ else:
 # YOLO11 optimized training configuration for T4 GPU with 3 classes
 TRAINING_CONFIG = {
     'model_size': 'yolo11n',      # YOLO11 nano model for T4 GPU efficiency
-    'epochs': 200,                # Increased epochs for YOLO11's improved architecture
-    'batch_size': 32,             # Increased batch size (YOLO11 is more memory efficient)
-    'imgsz': 640,                # Standard input size
+    'epochs': int(os.getenv('TRAINING_EPOCHS', 200)),                # Load from .env or default to 200
+    'batch_size': int(os.getenv('BATCH_SIZE', 32)),             # Load from .env or default to 32
+    'imgsz': int(os.getenv('IMAGE_SIZE', 640)),                # Load from .env or default to 640
     'patience': 25,               # Increased patience for YOLO11 training
     'save_period': 20,            # Save checkpoint every 20 epochs
     'workers': 4,                 # Increased workers for YOLO11
@@ -330,6 +354,22 @@ AUGMENTATION_CONFIG = {
     'copy_paste': 0.3,           # Copy-paste augmentation
 }
 
+# Display configuration summary
+print(f"\n{'='*60}")
+print("🔧 CONFIGURATION SUMMARY")
+print(f"{'='*60}")
+print(f"📊 Dataset Configuration:")
+print(f"   Workspace: {RF_WORKSPACE}")
+print(f"   Project: {RF_PROJECT}")
+print(f"   Version: {RF_VERSION}")
+print(f"   Selected Classes: {SELECTED_CLASSES}")
+print(f"\n🏋️ Training Configuration:")
+print(f"   Epochs: {TRAINING_CONFIG['epochs']}")
+print(f"   Batch Size: {TRAINING_CONFIG['batch_size']}")
+print(f"   Image Size: {TRAINING_CONFIG['imgsz']}")
+print(f"   Model: {TRAINING_CONFIG['model_size']}")
+print(f"{'='*60}")
+
 # ============================================================================
 # SECTION 5: INITIALIZE WANDB FOR EXPERIMENT TRACKING
 # ============================================================================
@@ -337,6 +377,11 @@ AUGMENTATION_CONFIG = {
 def setup_wandb():
     """Initialize Weights & Biases for experiment tracking"""
     try:
+        # Check if W&B API key is provided in environment
+        wandb_api_key = os.getenv('WANDB_API_KEY')
+        if wandb_api_key:
+            print(f"✅ W&B API Key found: {wandb_api_key[:8]}...")
+        
         wandb.init(
             project="bangladesh-street-food-yolo11-3class",
             name=f"yolo11n_{SELECTED_CLASSES[0]}_{SELECTED_CLASSES[1]}_{SELECTED_CLASSES[2]}_experiment",
@@ -349,13 +394,16 @@ def setup_wandb():
                 'classes': SELECTED_CLASSES,
                 'total_classes': len(SELECTED_CLASSES),
                 'experiment_type': '3_class_subset_yolo11',
-                'model_architecture': 'YOLO11n'
+                'model_architecture': 'YOLO11n',
+                'roboflow_project': RF_PROJECT,
+                'roboflow_workspace': RF_WORKSPACE
             }
         )
-        print("W&B initialized successfully for YOLO11 experiment")
+        print("✅ W&B initialized successfully for YOLO11 experiment")
         return True
     except Exception as e:
-        print(f"W&B initialization failed: {e}")
+        print(f"⚠️ W&B initialization failed: {e}")
+        print("💡 Tip: Add WANDB_API_KEY to your .env file for experiment tracking")
         return False
 
 # Initialize W&B (optional)
