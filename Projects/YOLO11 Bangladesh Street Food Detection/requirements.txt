@@ -17,6 +17,9 @@ PyYAML>=6.0
 # Environment and configuration
 python-dotenv>=0.19.0
 
+# GUI Components for Real-time Detection App
+customtkinter>=5.0.0
+
 # Optional: Experiment tracking
 wandb>=0.15.0
 
