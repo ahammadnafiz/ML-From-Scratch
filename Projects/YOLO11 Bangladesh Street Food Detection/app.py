@@ -89,6 +89,13 @@ class YOLOv12BangladeshFoodDetector:
         
         # Bind window close event
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        # Bind keyboard shortcuts for better UX
+        self.root.bind('<Control-q>', lambda e: self.on_closing())
+        self.root.bind('<Escape>', lambda e: self.on_closing())
+        
+        # Make window focusable
+        self.root.focus_set()
     
     def setup_sidebar(self):
         """Setup the left sidebar with controls"""
@@ -273,6 +280,18 @@ class YOLOv12BangladeshFoodDetector:
             hover_color=("darkred", "red")
         )
         reset_btn.pack(pady=15, padx=10, fill="x")
+        
+        # Exit button
+        exit_btn = ctk.CTkButton(
+            stats_content, 
+            text="🚪 Exit Application", 
+            command=self.on_closing,
+            height=40,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color=("gray", "gray20"),
+            hover_color=("darkgray", "gray10")
+        )
+        exit_btn.pack(pady=10, padx=10, fill="x")
     
     def setup_main_frame(self):
         """Setup the main video display frame"""
@@ -391,18 +410,35 @@ class YOLOv12BangladeshFoodDetector:
     
     def stop_camera(self):
         """Stop camera and detection"""
-        self.camera_active = False
-        
-        if self.cap:
-            self.cap.release()
-            self.cap = None
-        
-        self.start_camera_btn.configure(state="normal")
-        self.stop_camera_btn.configure(state="disabled")
-        
-        # Clear video display
-        self.video_label.configure(image=None, text="Camera stopped")
-        self.update_status("Camera stopped")
+        try:
+            self.camera_active = False
+            
+            # Wait a moment for the detection thread to finish
+            time.sleep(0.1)
+            
+            if self.cap:
+                self.cap.release()
+                self.cap = None
+            
+            self.start_camera_btn.configure(state="normal")
+            self.stop_camera_btn.configure(state="disabled")
+            
+            # Clear video display
+            self.video_label.configure(image=None, text="Camera stopped")
+            self.update_status("Camera stopped")
+            
+        except Exception as e:
+            print(f"Error stopping camera: {e}")
+            # Force reset the state even if there's an error
+            self.camera_active = False
+            if self.cap:
+                try:
+                    self.cap.release()
+                except:
+                    pass
+                self.cap = None
+            self.start_camera_btn.configure(state="normal")
+            self.stop_camera_btn.configure(state="disabled")
     
     def detection_loop(self):
         """Main detection loop running in separate thread"""
@@ -570,18 +606,45 @@ class YOLOv12BangladeshFoodDetector:
     
     def on_closing(self):
         """Handle application closing"""
-        if self.camera_active:
-            self.stop_camera()
-        
-        if self.cap:
-            self.cap.release()
-        
-        cv2.destroyAllWindows()
-        self.root.destroy()
+        try:
+            # Stop camera if active
+            if self.camera_active:
+                self.stop_camera()
+            
+            # Release camera resources
+            if self.cap:
+                self.cap.release()
+            
+            # Try to destroy OpenCV windows (may not work on headless systems)
+            try:
+                cv2.destroyAllWindows()
+            except (cv2.error, AttributeError):
+                # Ignore OpenCV window destruction errors on headless systems
+                pass
+            
+            # Destroy the main window
+            self.root.quit()  # Stop the mainloop
+            self.root.destroy()  # Destroy the window
+            
+        except Exception as e:
+            print(f"Error during application closing: {e}")
+            # Force exit if there's any issue
+            try:
+                self.root.quit()
+                self.root.destroy()
+            except:
+                pass
     
     def run(self):
         """Start the application"""
-        self.root.mainloop()
+        try:
+            self.root.mainloop()
+        except KeyboardInterrupt:
+            print("\nApplication interrupted by user")
+            self.on_closing()
+        except Exception as e:
+            print(f"Application error: {e}")
+            self.on_closing()
 
 def main():
     """Main function to run the application"""
@@ -594,6 +657,14 @@ def main():
         
         print("🍛 Starting YOLOv12 Bangladesh Street Food Detector...")
         print("Classes: Singara, Peyaju, Puri")
+        
+        # Check OpenCV build info for Ubuntu compatibility
+        if platform.system() == "Linux":
+            build_info = cv2.getBuildInformation()
+            if "GTK" not in build_info and "Qt" not in build_info:
+                print("⚠️  Warning: OpenCV may have limited GUI support on this system")
+                print("   If you encounter issues, consider installing: libgtk2.0-dev pkg-config")
+        
         print("=" * 50)
         
         # Create and run application
@@ -606,6 +677,9 @@ def main():
         print("pip install customtkinter opencv-python ultralytics Pillow numpy")
         print(f"Error: {e}")
         sys.exit(1)
+    except KeyboardInterrupt:
+        print("\n✋ Application interrupted by user")
+        sys.exit(0)
     except Exception as e:
         print(f"❌ Application error: {e}")
         sys.exit(1)
