@@ -1,33 +1,32 @@
 # YOLO11 Bangladesh Street Food Detection - Requirements
 # Core packages for training and inference
 
-ultralytics>=8.3.0
-roboflow>=1.1.0
-torch>=2.0.0
-torchvision>=0.15.0
-torchaudio>=2.0.0
+ultralytics
+roboflow
+torch
+torchvision
+torchaudio
 
 # Data handling and visualization
-opencv-python>=4.5.0
-numpy>=1.21.0
-matplotlib>=3.5.0
-Pillow>=8.3.0
-PyYAML>=6.0
+opencv-python
+numpy
+matplotlib
+Pillow
+PyYAML
 
 # Environment and configuration
-python-dotenv>=0.19.0
+python-dotenv
 
 # GUI Components for Real-time Detection App
-customtkinter>=5.0.0
+customtkinter
 
 # Optional: Experiment tracking
-wandb>=0.15.0
+wandb
 
 # Optional: Enhanced data science tools
-supervision>=0.15.0
-pandas>=1.3.0
-seaborn>=0.11.0
+supervision
+pandas
+seaborn
 
 # Jupyter notebook support (if running in notebooks)
-ipython>=7.0.0
-jupyter>=1.0.0
+ipython

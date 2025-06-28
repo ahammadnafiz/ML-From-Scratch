@@ -11,17 +11,32 @@ from ultralytics import YOLO
 import tkinter as tk
 from tkinter import messagebox, filedialog
 import json
+import platform
 
 # Configure CustomTkinter appearance
 ctk.set_appearance_mode("dark")  # "dark" or "light"
 ctk.set_default_color_theme("blue")  # "blue", "green", "dark-blue"
+
+# Fix scaling issues on Linux/Ubuntu
+if platform.system() == "Linux":
+    os.environ["GDK_SCALE"] = "1"
+    os.environ["GDK_DPI_SCALE"] = "1"
+    # Disable hardware acceleration for better rendering
+    os.environ["WEBKIT_DISABLE_COMPOSITING_MODE"] = "1"
 
 class YOLOv12BangladeshFoodDetector:
     def __init__(self):
         # Initialize main window
         self.root = ctk.CTk()
         self.root.title("YOLOv12 Bangladesh Street Food Detector")
-        self.root.geometry("1200x800")
+        self.root.geometry("1400x900")  # Increased size for better visibility
+        
+        # Configure scaling for better appearance on Linux
+        if platform.system() == "Linux":
+            self.root.tk.call('tk', 'scaling', 1.2)  # Increase UI scaling
+        
+        # Set minimum window size
+        self.root.minsize(1200, 800)
         
         # Detection parameters
         self.CONFIDENCE_THRESHOLD = 0.25
@@ -29,11 +44,11 @@ class YOLOv12BangladeshFoodDetector:
         self.MAX_DETECTIONS = 100
         
         # Bangladesh Street Food Classes
-        self.CLASSES = ['Fuska', 'Singara', 'Jhalmuri']
+        self.CLASSES = ['Singara', 'Peyaju', 'Puri']
         self.CLASS_COLORS = {
-            0: (255, 0, 0),    # Fuska - Red
-            1: (0, 255, 0),    # Singara - Green  
-            2: (0, 0, 255),    # Jhalmuri - Blue
+            0: (0, 255, 0),    # Singara - Green
+            1: (255, 165, 0),  # Peyaju - Orange
+            2: (255, 0, 255),  # Puri - Magenta
         }
         
         # Application state
@@ -77,128 +92,187 @@ class YOLOv12BangladeshFoodDetector:
     
     def setup_sidebar(self):
         """Setup the left sidebar with controls"""
-        self.sidebar_frame = ctk.CTkFrame(self.root, width=300, corner_radius=10)
+        self.sidebar_frame = ctk.CTkFrame(self.root, width=350, corner_radius=10)  # Increased width
         self.sidebar_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
         self.sidebar_frame.grid_propagate(False)
         
+        # Create scrollable frame for sidebar content
+        self.sidebar_scroll = ctk.CTkScrollableFrame(self.sidebar_frame, width=330, height=750)
+        self.sidebar_scroll.pack(fill="both", expand=True, padx=10, pady=10)
+        
         # Title
         title_label = ctk.CTkLabel(
-            self.sidebar_frame, 
+            self.sidebar_scroll, 
             text="🍛 Bangladesh Street Food\nDetector", 
-            font=ctk.CTkFont(size=18, weight="bold"),
+            font=ctk.CTkFont(size=20, weight="bold"),  # Increased font size
             justify="center"
         )
         title_label.pack(pady=20)
         
         # Model section
-        model_frame = ctk.CTkFrame(self.sidebar_frame)
-        model_frame.pack(fill="x", padx=20, pady=10)
+        model_frame = ctk.CTkFrame(self.sidebar_scroll)
+        model_frame.pack(fill="x", padx=10, pady=10)
         
-        ctk.CTkLabel(model_frame, text="Model Management", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(model_frame, text="Model Management", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
         
         self.load_model_btn = ctk.CTkButton(
             model_frame, 
             text="Load Model", 
             command=self.load_model,
-            height=35
+            height=40,  # Increased height
+            font=ctk.CTkFont(size=14)
         )
-        self.load_model_btn.pack(pady=5, padx=10, fill="x")
+        self.load_model_btn.pack(pady=5, padx=15, fill="x")
         
         self.model_status_label = ctk.CTkLabel(
             model_frame, 
             text="No model loaded", 
             text_color="red",
-            font=ctk.CTkFont(size=12)
+            font=ctk.CTkFont(size=13)  # Increased font size
         )
-        self.model_status_label.pack(pady=5)
+        self.model_status_label.pack(pady=8)
         
         # Camera controls
-        camera_frame = ctk.CTkFrame(self.sidebar_frame) 
-        camera_frame.pack(fill="x", padx=20, pady=10)
+        camera_frame = ctk.CTkFrame(self.sidebar_scroll) 
+        camera_frame.pack(fill="x", padx=10, pady=10)
         
-        ctk.CTkLabel(camera_frame, text="Camera Controls", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(camera_frame, text="Camera Controls", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
         
         self.start_camera_btn = ctk.CTkButton(
             camera_frame, 
             text="Start Camera", 
             command=self.start_camera,
             state="disabled",
-            height=35
+            height=40,  # Increased height
+            font=ctk.CTkFont(size=14)
         )
-        self.start_camera_btn.pack(pady=5, padx=10, fill="x")
+        self.start_camera_btn.pack(pady=5, padx=15, fill="x")
         
         self.stop_camera_btn = ctk.CTkButton(
             camera_frame, 
             text="Stop Camera", 
             command=self.stop_camera,
             state="disabled",
-            height=35
+            height=40,  # Increased height
+            font=ctk.CTkFont(size=14)
         )
-        self.stop_camera_btn.pack(pady=5, padx=10, fill="x")
+        self.stop_camera_btn.pack(pady=5, padx=15, fill="x")
         
         # Detection parameters
-        params_frame = ctk.CTkFrame(self.sidebar_frame)
-        params_frame.pack(fill="x", padx=20, pady=10)
+        params_frame = ctk.CTkFrame(self.sidebar_scroll)
+        params_frame.pack(fill="x", padx=10, pady=10)
         
-        ctk.CTkLabel(params_frame, text="Detection Parameters", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(params_frame, text="Detection Parameters", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
         
         # Confidence threshold
-        ctk.CTkLabel(params_frame, text="Confidence Threshold").pack(pady=(10, 5))
+        ctk.CTkLabel(params_frame, text="Confidence Threshold", font=ctk.CTkFont(size=13)).pack(pady=(10, 5))
         self.conf_slider = ctk.CTkSlider(
             params_frame, 
             from_=0.1, 
             to=0.9, 
             number_of_steps=80,
-            command=self.update_confidence
+            command=self.update_confidence,
+            height=20  # Increased height
         )
         self.conf_slider.set(self.CONFIDENCE_THRESHOLD)
-        self.conf_slider.pack(pady=5, padx=10, fill="x")
+        self.conf_slider.pack(pady=5, padx=15, fill="x")
         
-        self.conf_label = ctk.CTkLabel(params_frame, text=f"Confidence: {self.CONFIDENCE_THRESHOLD:.2f}")
-        self.conf_label.pack()
+        self.conf_label = ctk.CTkLabel(params_frame, text=f"Confidence: {self.CONFIDENCE_THRESHOLD:.2f}", font=ctk.CTkFont(size=13))
+        self.conf_label.pack(pady=5)
         
         # IoU threshold
-        ctk.CTkLabel(params_frame, text="IoU Threshold").pack(pady=(10, 5))
+        ctk.CTkLabel(params_frame, text="IoU Threshold", font=ctk.CTkFont(size=13)).pack(pady=(10, 5))
         self.iou_slider = ctk.CTkSlider(
             params_frame, 
             from_=0.3, 
             to=0.8, 
             number_of_steps=50,
-            command=self.update_iou
+            command=self.update_iou,
+            height=20  # Increased height
         )
         self.iou_slider.set(self.IOU_THRESHOLD)
-        self.iou_slider.pack(pady=5, padx=10, fill="x")
+        self.iou_slider.pack(pady=5, padx=15, fill="x")
         
-        self.iou_label = ctk.CTkLabel(params_frame, text=f"IoU: {self.IOU_THRESHOLD:.2f}")
-        self.iou_label.pack()
+        self.iou_label = ctk.CTkLabel(params_frame, text=f"IoU: {self.IOU_THRESHOLD:.2f}", font=ctk.CTkFont(size=13))
+        self.iou_label.pack(pady=5)
         
-        # Statistics
-        stats_frame = ctk.CTkFrame(self.sidebar_frame)
-        stats_frame.pack(fill="x", padx=20, pady=10)
+        # Statistics - Enhanced visibility
+        stats_frame = ctk.CTkFrame(self.sidebar_scroll, border_width=2, border_color="gray")
+        stats_frame.pack(fill="x", padx=10, pady=15)
         
-        ctk.CTkLabel(stats_frame, text="Detection Statistics", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=10)
+        # Statistics header with background color
+        stats_header = ctk.CTkFrame(stats_frame, fg_color=("gray70", "gray30"))
+        stats_header.pack(fill="x", padx=5, pady=5)
         
-        self.fps_label = ctk.CTkLabel(stats_frame, text="FPS: 0")
-        self.fps_label.pack(pady=2)
+        ctk.CTkLabel(
+            stats_header, 
+            text="📊 Detection Statistics", 
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=("black", "white")
+        ).pack(pady=12)
         
-        self.total_det_label = ctk.CTkLabel(stats_frame, text="Total Detections: 0")
-        self.total_det_label.pack(pady=2)
+        # Statistics content frame
+        stats_content = ctk.CTkFrame(stats_frame, fg_color="transparent")
+        stats_content.pack(fill="x", padx=10, pady=10)
         
-        # Class-specific counters
+        # FPS and Total detections with better spacing
+        fps_frame = ctk.CTkFrame(stats_content, fg_color=("gray85", "gray25"))
+        fps_frame.pack(fill="x", pady=5)
+        
+        self.fps_label = ctk.CTkLabel(
+            fps_frame, 
+            text="FPS: 0", 
+            font=ctk.CTkFont(size=15, weight="bold"),
+            text_color=("blue", "lightblue")
+        )
+        self.fps_label.pack(pady=8)
+        
+        total_frame = ctk.CTkFrame(stats_content, fg_color=("gray85", "gray25"))
+        total_frame.pack(fill="x", pady=5)
+        
+        self.total_det_label = ctk.CTkLabel(
+            total_frame, 
+            text="Total Detections: 0", 
+            font=ctk.CTkFont(size=15, weight="bold"),
+            text_color=("green", "lightgreen")
+        )
+        self.total_det_label.pack(pady=8)
+        
+        # Class-specific counters with enhanced visibility
+        class_header = ctk.CTkLabel(
+            stats_content, 
+            text="Detection Counts by Class:", 
+            font=ctk.CTkFont(size=14, weight="bold")
+        )
+        class_header.pack(pady=(15, 10))
+        
         self.class_labels = {}
+        class_colors = [("red", "lightcoral"), ("orange", "lightsalmon"), ("purple", "plum")]
+        
         for i, cls_name in enumerate(self.CLASSES):
-            label = ctk.CTkLabel(stats_frame, text=f"{cls_name}: 0")
-            label.pack(pady=1)
+            class_frame = ctk.CTkFrame(stats_content, fg_color=("gray85", "gray25"))
+            class_frame.pack(fill="x", pady=3)
+            
+            label = ctk.CTkLabel(
+                class_frame, 
+                text=f"{cls_name}: 0", 
+                font=ctk.CTkFont(size=14, weight="bold"),
+                text_color=class_colors[i % len(class_colors)]
+            )
+            label.pack(pady=6)
             self.class_labels[i] = label
         
-        # Reset button
+        # Reset button with enhanced styling
         reset_btn = ctk.CTkButton(
-            stats_frame, 
-            text="Reset Statistics", 
+            stats_content, 
+            text="🔄 Reset Statistics", 
             command=self.reset_statistics,
-            height=30
+            height=40,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color=("red", "darkred"),
+            hover_color=("darkred", "red")
         )
-        reset_btn.pack(pady=10, padx=10, fill="x")
+        reset_btn.pack(pady=15, padx=10, fill="x")
     
     def setup_main_frame(self):
         """Setup the main video display frame"""
@@ -245,7 +319,7 @@ class YOLOv12BangladeshFoodDetector:
         """Automatically load model if found in the project directory"""
         # Common model paths to check
         model_paths = [
-            "yolov12_bangladesh_street_food/yolov12l_3classes_Fuska_Singara_Jhalmuri/weights/best.pt",
+            "yolov12_bangladesh_street_food/yolov12l_3classes_Singara_Peyaju_Puri/weights/best.pt",
             "runs/detect/train/weights/best.pt",
             "best.pt",
             "yolov12l.pt"
@@ -460,14 +534,15 @@ class YOLOv12BangladeshFoodDetector:
             self.fps_counter = 0
             self.fps_start_time = current_time
             
-            # Update GUI labels
+            # Update GUI labels with enhanced formatting
             self.root.after(0, lambda: self.fps_label.configure(text=f"FPS: {self.current_fps:.1f}"))
             self.root.after(0, lambda: self.total_det_label.configure(text=f"Total Detections: {self.total_detections}"))
             
-            # Update class-specific counters
+            # Update class-specific counters with better formatting
             for i, cls_name in enumerate(self.CLASSES):
                 count = self.detection_stats[cls_name]
-                self.root.after(0, lambda i=i, count=count: self.class_labels[i].configure(text=f"{self.CLASSES[i]}: {count}"))
+                self.root.after(0, lambda i=i, cls=cls_name, count=count: 
+                    self.class_labels[i].configure(text=f"{cls}: {count}"))
     
     def update_confidence(self, value):
         """Update confidence threshold"""
@@ -484,7 +559,7 @@ class YOLOv12BangladeshFoodDetector:
         self.detection_stats = {cls: 0 for cls in self.CLASSES}
         self.total_detections = 0
         
-        # Update display
+        # Update display with enhanced formatting
         self.total_det_label.configure(text="Total Detections: 0")
         for i, cls_name in enumerate(self.CLASSES):
             self.class_labels[i].configure(text=f"{cls_name}: 0")
@@ -518,7 +593,7 @@ def main():
         from PIL import Image, ImageTk
         
         print("🍛 Starting YOLOv12 Bangladesh Street Food Detector...")
-        print("Classes: Fuska, Singara, Jhalmuri")
+        print("Classes: Singara, Peyaju, Puri")
         print("=" * 50)
         
         # Create and run application
