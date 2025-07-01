@@ -20,6 +20,10 @@ python-dotenv
 # GUI Components for Real-time Detection App
 customtkinter
 
+# Streamlit Web App
+streamlit
+onnxruntime
+
 # Optional: Experiment tracking
 wandb
 
