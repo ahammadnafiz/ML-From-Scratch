@@ -1,343 +1,535 @@
-# ONNX single image test for YOLOv12 model
+# ONNX single image test for YOLOv12 model - Enhanced Robust Version
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import onnxruntime as ort
 import os
 from pathlib import Path
+import json
+import time
+from typing import Tuple, List, Optional
+import warnings
+warnings.filterwarnings('ignore')
 
-# Update these paths
-model_path = "model/best.onnx"  # Your ONNX model path
-image_path = "image.png"  # Your test image path
+# Configuration
+CONFIG = {
+    'model_path': "model/best.onnx",
+    'image_path': "image.jpg",
+    'input_size': 640,
+    'confidence_threshold': 0.45,
+    'nms_threshold': 0.55,
+    'selected_classes': ['singara', 'peyaju', 'beguni'],
+    'max_detections': 1000,
+    'agnostic_nms': True,  # Set True for class-agnostic NMS
+    'multi_label': True,   # Set True if model supports multi-label detection
+    'letterbox_color': (114, 114, 114),  # Padding color
+    'save_results': True,
+    'output_dir': 'results'
+}
 
-# Your class names
-SELECTED_CLASSES = [
-    'singara',
-    'peyaju',
-    'beguni'
-]
-
-# YOLO model parameters (adjust based on your model)
-INPUT_SIZE = 640  # Standard YOLO input size
-CONFIDENCE_THRESHOLD = 0.20
-NMS_THRESHOLD = 0.50
-
-def preprocess_image(image, input_size=640):
-    """Preprocess image for ONNX model inference"""
-    # Get original dimensions
-    original_height, original_width = image.shape[:2]
-    
-    # Resize image while maintaining aspect ratio
-    scale = min(input_size / original_width, input_size / original_height)
-    new_width = int(original_width * scale)
-    new_height = int(original_height * scale)
-    
-    resized_image = cv2.resize(image, (new_width, new_height))
-    
-    # Create padded image
-    padded_image = np.full((input_size, input_size, 3), 114, dtype=np.uint8)
-    
-    # Calculate padding offsets
-    pad_x = (input_size - new_width) // 2
-    pad_y = (input_size - new_height) // 2
-    
-    # Place resized image in center
-    padded_image[pad_y:pad_y + new_height, pad_x:pad_x + new_width] = resized_image
-    
-    # Convert to RGB and normalize
-    padded_image = cv2.cvtColor(padded_image, cv2.COLOR_BGR2RGB)
-    padded_image = padded_image.astype(np.float32) / 255.0
-    
-    # Convert to NCHW format (batch, channels, height, width)
-    input_tensor = np.transpose(padded_image, (2, 0, 1))
-    input_tensor = np.expand_dims(input_tensor, axis=0)
-    
-    return input_tensor, scale, pad_x, pad_y
-
-def postprocess_detections(outputs, scale, pad_x, pad_y, conf_threshold=0.25, nms_threshold=0.45):
-    """Post-process ONNX model outputs"""
-    # Get predictions (assuming standard YOLO output format)
-    predictions = outputs[0]  # Shape: [1, num_detections, 5 + num_classes] or [1, 7, 8400]
-    
-    print(f"Raw predictions shape: {predictions.shape}")
-    
-    # Handle different output formats
-    if len(predictions.shape) == 3 and predictions.shape[1] > predictions.shape[2]:
-        # Format: [1, num_detections, features] - transpose to [1, features, num_detections]
-        predictions = np.transpose(predictions, (0, 2, 1))
-        print(f"Transposed predictions shape: {predictions.shape}")
-    
-    # Remove batch dimension: [features, num_detections]
-    predictions = predictions[0]
-    print(f"After removing batch dim: {predictions.shape}")
-    
-    # For YOLOv11/v12: predictions format is [num_features, num_detections]
-    # where num_features = 4 (bbox) + 1 (conf) + num_classes
-    # Transpose to get [num_detections, num_features]
-    if predictions.shape[0] < predictions.shape[1]:
-        predictions = predictions.T
-        print(f"Final predictions shape: {predictions.shape}")
-    
-    # Extract boxes and scores
-    boxes = predictions[:, :4]  # x_center, y_center, width, height
-    
-    # For YOLOv11, the format might be: [x, y, w, h, class0_conf, class1_conf, class2_conf]
-    # No separate objectness score
-    if predictions.shape[1] == 7:  # 4 bbox + 3 classes
-        class_scores = predictions[:, 4:]  # All class confidences
-        scores = np.max(class_scores, axis=1)  # Use max class confidence as objectness
-    else:
-        # Traditional format: [x, y, w, h, objectness, class0, class1, ...]
-        scores = predictions[:, 4]  # objectness score
-        class_scores = predictions[:, 5:]  # class probabilities
-    
-    # Get class with highest probability for each detection
-    class_ids = np.argmax(class_scores, axis=1)
-    class_confidences = np.max(class_scores, axis=1)
-    
-    # Use class confidence as final confidence (common in newer YOLO versions)
-    confidences = class_confidences
-    
-    print(f"Max confidence: {np.max(confidences):.4f}, Min confidence: {np.min(confidences):.4f}")
-    print(f"Class IDs range: {np.min(class_ids)} to {np.max(class_ids)}")
-    print(f"Unique class IDs: {np.unique(class_ids)}")
-    
-    # Filter by confidence threshold
-    valid_indices = confidences > conf_threshold
-    boxes = boxes[valid_indices]
-    confidences = confidences[valid_indices]
-    class_ids = class_ids[valid_indices]
-    
-    print(f"After confidence filtering: {len(boxes)} detections")
-    
-    if len(boxes) == 0:
-        return np.array([]), np.array([]), np.array([])
-    
-    # Convert from center format to corner format
-    x_centers = boxes[:, 0]
-    y_centers = boxes[:, 1]
-    widths = boxes[:, 2]
-    heights = boxes[:, 3]
-    
-    x1 = x_centers - widths / 2
-    y1 = y_centers - heights / 2
-    x2 = x_centers + widths / 2
-    y2 = y_centers + heights / 2
-    
-    # Adjust coordinates back to original image scale
-    # The coordinates are in normalized format (0-1) or pixel format (0-640)
-    # Let's check and handle both cases
-    if np.max(x2) <= 1.0:  # Normalized coordinates
-        print("Detected normalized coordinates")
-        x1 = x1 * INPUT_SIZE
-        y1 = y1 * INPUT_SIZE
-        x2 = x2 * INPUT_SIZE
-        y2 = y2 * INPUT_SIZE
-    else:
-        print("Detected pixel coordinates")
-    
-    # Adjust for padding and scale
-    x1 = (x1 - pad_x) / scale
-    y1 = (y1 - pad_y) / scale
-    x2 = (x2 - pad_x) / scale
-    y2 = (y2 - pad_y) / scale
-    
-    # Ensure coordinates are within image bounds
-    x1 = np.clip(x1, 0, None)
-    y1 = np.clip(y1, 0, None)
-    x2 = np.clip(x2, 0, None)
-    y2 = np.clip(y2, 0, None)
-    
-    boxes_xyxy = np.column_stack([x1, y1, x2, y2])
-    
-    # Apply Non-Maximum Suppression
-    indices = cv2.dnn.NMSBoxes(
-        boxes_xyxy.tolist(),
-        confidences.tolist(),
-        conf_threshold,
-        nms_threshold
-    )
-    
-    if len(indices) > 0:
-        indices = indices.flatten()
-        return boxes_xyxy[indices], confidences[indices], class_ids[indices]
-    else:
-        return np.array([]), np.array([]), np.array([])
-
-def draw_detections(image, boxes, confidences, class_ids, class_names):
-    """Draw bounding boxes and labels on image"""
-    if len(boxes) == 0:
-        return image
-    
-    annotated_image = image.copy()
-    
-    # Define colors for each class
-    colors = [
-        (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255),
-        (0, 255, 255), (128, 0, 128), (255, 165, 0), (0, 128, 128), (128, 128, 0)
-    ]
-    
-    for i, (box, conf, class_id) in enumerate(zip(boxes, confidences, class_ids)):
-        x1, y1, x2, y2 = box.astype(int)
+class YOLOv12Detector:
+    def __init__(self, config: dict):
+        self.config = config
+        self.model_path = config['model_path']
+        self.input_size = config['input_size']
+        self.confidence_threshold = config['confidence_threshold']
+        self.nms_threshold = config['nms_threshold']
+        self.class_names = config['selected_classes']
+        self.max_detections = config['max_detections']
+        self.agnostic_nms = config['agnostic_nms']
+        self.multi_label = config['multi_label']
+        self.letterbox_color = config['letterbox_color']
         
-        # Get class name and color
-        # Ensure class_id is within valid range
-        valid_class_id = class_id % len(class_names) if len(class_names) > 0 else 0
-        class_name = class_names[valid_class_id] if valid_class_id < len(class_names) else f"Class_{class_id}"
-        color = colors[valid_class_id % len(colors)]
+        # Initialize ONNX session
+        self.session = self._load_model()
+        self.input_name = self.session.get_inputs()[0].name
+        self.output_names = [output.name for output in self.session.get_outputs()]
         
-        # Draw bounding box
-        cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, 2)
+        # Model metadata
+        self._analyze_model_properties()
         
-        # Draw label
-        label = f"{class_name} {conf:.2f}"
-        label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+    def _load_model(self) -> ort.InferenceSession:
+        """Load ONNX model with optimizations"""
+        if not os.path.exists(self.model_path):
+            raise FileNotFoundError(f"Model file not found: {self.model_path}")
         
-        # Draw label background
-        cv2.rectangle(
-            annotated_image,
-            (x1, y1 - label_size[1] - 10),
-            (x1 + label_size[0], y1),
-            color,
-            -1
+        # Set up session options for better performance
+        session_options = ort.SessionOptions()
+        session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        
+        # Enable all available providers (CPU, CUDA if available)
+        providers = ['CPUExecutionProvider']
+        if ort.get_available_providers():
+            available = ort.get_available_providers()
+            if 'CUDAExecutionProvider' in available:
+                providers.insert(0, 'CUDAExecutionProvider')
+            if 'TensorrtExecutionProvider' in available:
+                providers.insert(0, 'TensorrtExecutionProvider')
+        
+        try:
+            session = ort.InferenceSession(
+                self.model_path, 
+                sess_options=session_options,
+                providers=providers
+            )
+            print(f"✅ Model loaded with providers: {session.get_providers()}")
+            return session
+        except Exception as e:
+            print(f"❌ Error loading model: {e}")
+            raise
+    
+    def _analyze_model_properties(self):
+        """Analyze model input/output properties"""
+        input_info = self.session.get_inputs()[0]
+        output_info = self.session.get_outputs()
+        
+        print(f"📊 Model Analysis:")
+        print(f"   Input: {input_info.name} - Shape: {input_info.shape} - Type: {input_info.type}")
+        for i, output in enumerate(output_info):
+            print(f"   Output {i}: {output.name} - Shape: {output.shape} - Type: {output.type}")
+        
+        # Determine expected input size from model
+        if input_info.shape and len(input_info.shape) >= 3:
+            model_input_size = input_info.shape[-1] if input_info.shape[-1] > 0 else self.input_size
+            if model_input_size != self.input_size:
+                print(f"⚠️  Adjusting input size from {self.input_size} to {model_input_size}")
+                self.input_size = model_input_size
+    
+    def letterbox_resize(self, image: np.ndarray, new_shape: int = 640, 
+                        color: Tuple[int, int, int] = (114, 114, 114), 
+                        auto: bool = False, scaleup: bool = True, 
+                        stride: int = 32) -> Tuple[np.ndarray, float, Tuple[int, int]]:
+        """
+        Enhanced letterbox resize with better aspect ratio handling
+        """
+        shape = image.shape[:2]  # current shape [height, width]
+        if isinstance(new_shape, int):
+            new_shape = (new_shape, new_shape)
+        
+        # Scale ratio (new / old)
+        r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
+        if not scaleup:  # only scale down, do not scale up (for better val mAP)
+            r = min(r, 1.0)
+        
+        # Compute padding
+        ratio = r, r  # width, height ratios
+        new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
+        dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]  # wh padding
+        
+        if auto:  # minimum rectangle
+            dw, dh = np.mod(dw, stride), np.mod(dh, stride)  # wh padding
+        
+        dw /= 2  # divide padding into 2 sides
+        dh /= 2
+        
+        if shape[::-1] != new_unpad:  # resize
+            image = cv2.resize(image, new_unpad, interpolation=cv2.INTER_LINEAR)
+        
+        top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
+        left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
+        
+        image = cv2.copyMakeBorder(image, top, bottom, left, right, 
+                                  cv2.BORDER_CONSTANT, value=color)  # add border
+        
+        return image, ratio[0], (left, top)
+    
+    def preprocess_image(self, image: np.ndarray) -> Tuple[np.ndarray, float, Tuple[int, int]]:
+        """Enhanced preprocessing with better normalization"""
+        # Store original dimensions
+        original_shape = image.shape[:2]
+        
+        # Apply letterbox resize
+        processed_image, ratio, pad = self.letterbox_resize(
+            image, new_shape=self.input_size, color=self.letterbox_color
         )
         
-        # Draw label text
-        cv2.putText(
-            annotated_image,
-            label,
-            (x1, y1 - 5),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (255, 255, 255),
-            2
-        )
+        # Convert BGR to RGB
+        processed_image = cv2.cvtColor(processed_image, cv2.COLOR_BGR2RGB)
+        
+        # Normalize to [0, 1] with proper dtype
+        processed_image = processed_image.astype(np.float32) / 255.0
+        
+        # Convert to NCHW format and add batch dimension
+        input_tensor = np.transpose(processed_image, (2, 0, 1))
+        input_tensor = np.expand_dims(input_tensor, axis=0)
+        
+        # Ensure contiguous array for better performance
+        input_tensor = np.ascontiguousarray(input_tensor)
+        
+        return input_tensor, ratio, pad
     
-    return annotated_image
-
-print("🎯 Testing ONNX YOLOv12 on single image...")
-print(f"Model: {model_path}")
-print(f"Image: {image_path}")
-
-# Check if files exist
-if not os.path.exists(model_path):
-    print(f"❌ ONNX model file not found: {model_path}")
-    print("Make sure you have exported your model to ONNX format")
-    exit()
+    def run_inference(self, input_tensor: np.ndarray) -> List[np.ndarray]:
+        """Run inference with error handling and timing"""
+        try:
+            start_time = time.time()
+            outputs = self.session.run(self.output_names, {self.input_name: input_tensor})
+            inference_time = time.time() - start_time
+            print(f"⚡ Inference time: {inference_time:.4f}s")
+            return outputs
+        except Exception as e:
+            print(f"❌ Inference error: {e}")
+            raise
     
-if not os.path.exists(image_path):
-    print(f"❌ Image file not found: {image_path}")
-    print(f"Current directory: {os.getcwd()}")
-    print("Available files:", [f for f in os.listdir('.') if f.endswith(('.jpg', '.png', '.jpeg', '.onnx'))])
-    exit()
-
-try:
-    # Load ONNX model
-    print("📦 Loading ONNX model...")
-    ort_session = ort.InferenceSession(model_path)
+    def postprocess_detections(self, outputs: List[np.ndarray], ratio: float, 
+                             pad: Tuple[int, int], original_shape: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Enhanced post-processing with multiple output format support"""
+        predictions = outputs[0]
+        
+        print(f"🔍 Raw predictions shape: {predictions.shape}")
+        
+        # Handle different YOLO output formats
+        predictions = self._normalize_predictions(predictions)
+        
+        if len(predictions) == 0:
+            return np.array([]), np.array([]), np.array([])
+        
+        # Extract components
+        boxes, scores, class_ids = self._extract_detections(predictions)
+        
+        # Filter by confidence
+        valid_mask = scores >= self.confidence_threshold
+        boxes = boxes[valid_mask]
+        scores = scores[valid_mask]
+        class_ids = class_ids[valid_mask]
+        
+        print(f"📊 After confidence filtering ({self.confidence_threshold}): {len(boxes)} detections")
+        
+        if len(boxes) == 0:
+            return np.array([]), np.array([]), np.array([])
+        
+        # Convert boxes to original image coordinates
+        boxes = self._rescale_boxes(boxes, ratio, pad, original_shape)
+        
+        # Apply Non-Maximum Suppression
+        keep_indices = self._apply_nms(boxes, scores, class_ids)
+        
+        return boxes[keep_indices], scores[keep_indices], class_ids[keep_indices]
     
-    # Get model input/output info
-    input_name = ort_session.get_inputs()[0].name
-    input_shape = ort_session.get_inputs()[0].shape
-    output_names = [output.name for output in ort_session.get_outputs()]
+    def _normalize_predictions(self, predictions: np.ndarray) -> np.ndarray:
+        """Normalize predictions to standard format [N, features]"""
+        # Remove batch dimension if present
+        if predictions.ndim == 3:
+            predictions = predictions[0]
+        
+        # Handle different orientations
+        if predictions.shape[0] < predictions.shape[1]:
+            predictions = predictions.T
+        
+        print(f"📐 Normalized predictions shape: {predictions.shape}")
+        return predictions
     
-    print(f"✅ ONNX model loaded successfully")
-    print(f"Input shape: {input_shape}")
-    print(f"Input name: {input_name}")
-    print(f"Output names: {output_names}")
+    def _extract_detections(self, predictions: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Extract boxes, scores, and class IDs from predictions"""
+        num_classes = len(self.class_names)
+        
+        # Extract bounding boxes (first 4 columns)
+        boxes = predictions[:, :4]  # [x_center, y_center, width, height]
+        
+        # Handle different prediction formats
+        if predictions.shape[1] == 4 + num_classes:
+            # Format: [x, y, w, h, class0_conf, class1_conf, ...]
+            class_scores = predictions[:, 4:]
+            scores = np.max(class_scores, axis=1)
+            class_ids = np.argmax(class_scores, axis=1)
+        elif predictions.shape[1] == 5 + num_classes:
+            # Format: [x, y, w, h, objectness, class0_prob, class1_prob, ...]
+            objectness = predictions[:, 4]
+            class_probs = predictions[:, 5:]
+            class_scores = objectness[:, np.newaxis] * class_probs
+            scores = np.max(class_scores, axis=1)
+            class_ids = np.argmax(class_scores, axis=1)
+        else:
+            # Fallback: assume last columns are class scores
+            class_scores = predictions[:, 4:]
+            scores = np.max(class_scores, axis=1)
+            class_ids = np.argmax(class_scores, axis=1)
+        
+        # Handle multi-label detection if enabled
+        if self.multi_label:
+            # For multi-label, we might want to keep multiple high-confidence classes per box
+            # This is a simplified implementation
+            pass
+        
+        print(f"📈 Score statistics: min={np.min(scores):.4f}, max={np.max(scores):.4f}, mean={np.mean(scores):.4f}")
+        print(f"🏷️  Class distribution: {dict(zip(*np.unique(class_ids, return_counts=True)))}")
+        
+        return boxes, scores, class_ids
     
-except Exception as e:
-    print(f"❌ Error loading ONNX model: {e}")
-    print("Make sure you have onnxruntime installed: pip install onnxruntime")
-    exit()
-
-try:
-    # Load and preprocess image
-    print("📷 Loading and preprocessing image...")
-    image = cv2.imread(image_path)
-    if image is None:
-        print(f"❌ Could not load image: {image_path}")
-        exit()
+    def _rescale_boxes(self, boxes: np.ndarray, ratio: float, pad: Tuple[int, int], 
+                      original_shape: Tuple[int, int]) -> np.ndarray:
+        """Convert boxes back to original image coordinates"""
+        if len(boxes) == 0:
+            return boxes
+        
+        pad_x, pad_y = pad
+        
+        # Convert from center format to corner format
+        x_center, y_center, width, height = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+        
+        # Handle both normalized and pixel coordinates
+        if np.max(boxes) <= 1.0:
+            # Normalized coordinates
+            x_center *= self.input_size
+            y_center *= self.input_size
+            width *= self.input_size
+            height *= self.input_size
+        
+        # Convert to corner coordinates
+        x1 = x_center - width / 2
+        y1 = y_center - height / 2
+        x2 = x_center + width / 2
+        y2 = y_center + height / 2
+        
+        # Remove padding
+        x1 -= pad_x
+        y1 -= pad_y
+        x2 -= pad_x
+        y2 -= pad_y
+        
+        # Scale back to original image size
+        x1 /= ratio
+        y1 /= ratio
+        x2 /= ratio
+        y2 /= ratio
+        
+        # Clip to image boundaries
+        x1 = np.clip(x1, 0, original_shape[1])
+        y1 = np.clip(y1, 0, original_shape[0])
+        x2 = np.clip(x2, 0, original_shape[1])
+        y2 = np.clip(y2, 0, original_shape[0])
+        
+        return np.column_stack([x1, y1, x2, y2])
     
-    original_image = image.copy()
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    def _apply_nms(self, boxes: np.ndarray, scores: np.ndarray, 
+                   class_ids: np.ndarray) -> np.ndarray:
+        """Apply Non-Maximum Suppression"""
+        if len(boxes) == 0:
+            return np.array([], dtype=int)
+        
+        if self.agnostic_nms:
+            # Class-agnostic NMS
+            indices = cv2.dnn.NMSBoxes(
+                boxes.tolist(), scores.tolist(),
+                self.confidence_threshold, self.nms_threshold
+            )
+        else:
+            # Class-aware NMS
+            keep_indices = []
+            for class_id in np.unique(class_ids):
+                class_mask = class_ids == class_id
+                class_boxes = boxes[class_mask]
+                class_scores = scores[class_mask]
+                
+                if len(class_boxes) > 0:
+                    indices = cv2.dnn.NMSBoxes(
+                        class_boxes.tolist(), class_scores.tolist(),
+                        self.confidence_threshold, self.nms_threshold
+                    )
+                    
+                    if len(indices) > 0:
+                        indices = indices.flatten()
+                        original_indices = np.where(class_mask)[0][indices]
+                        keep_indices.extend(original_indices)
+            
+            indices = np.array(keep_indices) if keep_indices else np.array([])
+        
+        if isinstance(indices, tuple) and len(indices) > 0:
+            indices = indices[0] if len(indices[0]) > 0 else np.array([])
+        elif len(indices) > 0:
+            indices = indices.flatten()
+        else:
+            indices = np.array([])
+        
+        # Limit number of detections
+        if len(indices) > self.max_detections:
+            # Sort by confidence and keep top detections
+            sorted_indices = indices[np.argsort(scores[indices])[::-1][:self.max_detections]]
+            indices = sorted_indices
+        
+        print(f"🎯 After NMS: {len(indices)} final detections")
+        return indices
     
-    # Preprocess image
-    input_tensor, scale, pad_x, pad_y = preprocess_image(image, INPUT_SIZE)
-    print(f"✅ Image preprocessed: {input_tensor.shape}")
-    
-except Exception as e:
-    print(f"❌ Error preprocessing image: {e}")
-    exit()
-
-try:
-    # Run inference
-    print("🔍 Running ONNX inference...")
-    outputs = ort_session.run(output_names, {input_name: input_tensor})
-    print(f"✅ Inference completed")
-    print(f"Output shape: {[output.shape for output in outputs]}")
-    
-except Exception as e:
-    print(f"❌ Error during inference: {e}")
-    exit()
-
-try:
-    # Post-process results
-    print("📊 Post-processing detections...")
-    boxes, confidences, class_ids = postprocess_detections(
-        outputs, scale, pad_x, pad_y, CONFIDENCE_THRESHOLD, NMS_THRESHOLD
-    )
-    
-    print(f"✅ Found {len(boxes)} detections after NMS")
-    
-except Exception as e:
-    print(f"❌ Error post-processing: {e}")
-    exit()
-
-try:
-    # Draw detections
-    print("🎨 Creating visualization...")
-    annotated_image = draw_detections(image_rgb, boxes, confidences, class_ids, SELECTED_CLASSES)
-    
-    # Display results
-    plt.figure(figsize=(15, 7))
-    
-    plt.subplot(1, 2, 1)
-    plt.imshow(image_rgb)
-    plt.title("Original Image")
-    plt.axis('off')
-    
-    plt.subplot(1, 2, 2)
-    plt.imshow(annotated_image)
-    plt.title(f"ONNX Detection Results ({len(boxes)} objects)")
-    plt.axis('off')
-    
-    plt.tight_layout()
-    plt.show()
-    
-    # Print detailed results
-    print(f"\n📊 Detection Summary:")
-    if len(boxes) > 0:
-        print(f"✅ Found {len(boxes)} objects:")
-        for i, (box, conf, class_id) in enumerate(zip(boxes, confidences, class_ids)):
-            # Map class_id to valid range
-            valid_class_id = class_id % len(SELECTED_CLASSES) if len(SELECTED_CLASSES) > 0 else 0
-            class_name = SELECTED_CLASSES[valid_class_id] if valid_class_id < len(SELECTED_CLASSES) else f"Unknown_Class_{class_id}"
+    def draw_detections(self, image: np.ndarray, boxes: np.ndarray, 
+                       scores: np.ndarray, class_ids: np.ndarray) -> np.ndarray:
+        """Enhanced visualization with better styling"""
+        if len(boxes) == 0:
+            return image
+        
+        annotated_image = image.copy()
+        
+        # Enhanced color palette
+        colors = [
+            (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255),
+            (0, 255, 255), (128, 0, 128), (255, 165, 0), (0, 128, 128), (128, 128, 0),
+            (255, 192, 203), (165, 42, 42), (255, 69, 0), (34, 139, 34), (70, 130, 180)
+        ]
+        
+        # Calculate font scale based on image size
+        font_scale = max(0.3, min(image.shape[0], image.shape[1]) / 1000)
+        thickness = max(1, int(font_scale * 3))
+        
+        for box, score, class_id in zip(boxes, scores, class_ids):
             x1, y1, x2, y2 = box.astype(int)
-            print(f"  {i+1}. {class_name}: {conf:.3f} - Box: ({x1}, {y1}, {x2}, {y2})")
-    else:
-        print("❌ No objects detected")
-        print("Try lowering confidence threshold or check if image contains target objects")
+            
+            # Ensure valid class ID
+            valid_class_id = max(0, min(class_id, len(self.class_names) - 1))
+            class_name = self.class_names[valid_class_id]
+            color = colors[valid_class_id % len(colors)]
+            
+            # Draw bounding box with variable thickness
+            box_thickness = max(1, thickness)
+            cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, box_thickness)
+            
+            # Create label with confidence
+            label = f"{class_name} {score:.3f}"
+            
+            # Calculate label size
+            (label_width, label_height), baseline = cv2.getTextSize(
+                label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness
+            )
+            
+            # Draw label background
+            label_y = max(y1, label_height + 10)
+            cv2.rectangle(
+                annotated_image,
+                (x1, label_y - label_height - baseline - 5),
+                (x1 + label_width + 5, label_y + baseline),
+                color,
+                -1
+            )
+            
+            # Draw label text
+            cv2.putText(
+                annotated_image, label,
+                (x1 + 2, label_y - baseline - 2),
+                cv2.FONT_HERSHEY_SIMPLEX, font_scale,
+                (255, 255, 255), thickness
+            )
+        
+        return annotated_image
+    
+    def detect(self, image_path: str) -> dict:
+        """Main detection pipeline"""
+        # Load image
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError(f"Could not load image: {image_path}")
+        
+        original_shape = image.shape[:2]
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        # Preprocess
+        input_tensor, ratio, pad = self.preprocess_image(image)
+        
+        # Run inference
+        outputs = self.run_inference(input_tensor)
+        
+        # Post-process
+        boxes, scores, class_ids = self.postprocess_detections(outputs, ratio, pad, original_shape)
+        
+        # Draw results
+        annotated_image = self.draw_detections(image_rgb, boxes, scores, class_ids)
+        
+        return {
+            'original_image': image_rgb,
+            'annotated_image': annotated_image,
+            'boxes': boxes,
+            'scores': scores,
+            'class_ids': class_ids,
+            'detections': len(boxes)
+        }
 
-except Exception as e:
-    print(f"❌ Error during visualization: {e}")
-    # Still print detection results if available
-    if 'boxes' in locals() and len(boxes) > 0:
-        print(f"\n📊 Raw Detection Results:")
-        for i, (box, conf, class_id) in enumerate(zip(boxes, confidences, class_ids)):
-            valid_class_id = class_id % len(SELECTED_CLASSES) if len(SELECTED_CLASSES) > 0 else 0
-            class_name = SELECTED_CLASSES[valid_class_id] if valid_class_id < len(SELECTED_CLASSES) else f"Unknown_Class_{class_id}"
-            x1, y1, x2, y2 = box.astype(int)
-            print(f"  {i+1}. {class_name}: {conf:.3f} - Box: ({x1}, {y1}, {x2}, {y2})")
+def main():
+    """Main execution function"""
+    print("🎯 Enhanced ONNX YOLOv12 Detection Pipeline")
+    print("=" * 50)
+    
+    # Create output directory
+    if CONFIG['save_results']:
+        os.makedirs(CONFIG['output_dir'], exist_ok=True)
+    
+    # Validate inputs
+    if not os.path.exists(CONFIG['model_path']):
+        print(f"❌ Model file not found: {CONFIG['model_path']}")
+        return
+    
+    if not os.path.exists(CONFIG['image_path']):
+        print(f"❌ Image file not found: {CONFIG['image_path']}")
+        print(f"📁 Current directory: {os.getcwd()}")
+        available_images = [f for f in os.listdir('.') if f.lower().endswith(('.jpg', '.png', '.jpeg', '.bmp', '.tiff'))]
+        if available_images:
+            print(f"📷 Available images: {available_images}")
+        return
+    
+    try:
+        # Initialize detector
+        detector = YOLOv12Detector(CONFIG)
+        
+        # Run detection
+        print("\n🔍 Running detection...")
+        results = detector.detect(CONFIG['image_path'])
+        
+        # Display results
+        print(f"\n📊 Detection Results:")
+        print(f"✅ Found {results['detections']} objects")
+        
+        if results['detections'] > 0:
+            print("\n📋 Detailed detections:")
+            for i, (box, score, class_id) in enumerate(zip(results['boxes'], results['scores'], results['class_ids'])):
+                class_name = CONFIG['selected_classes'][min(class_id, len(CONFIG['selected_classes']) - 1)]
+                x1, y1, x2, y2 = box.astype(int)
+                print(f"   {i+1:2d}. {class_name:12s} | Conf: {score:.4f} | Box: ({x1:4d},{y1:4d},{x2:4d},{y2:4d}) | Area: {(x2-x1)*(y2-y1):6d}")
+        
+        # Visualization
+        plt.figure(figsize=(16, 8))
+        
+        plt.subplot(1, 2, 1)
+        plt.imshow(results['original_image'])
+        plt.title("Original Image", fontsize=14, fontweight='bold')
+        plt.axis('off')
+        
+        plt.subplot(1, 2, 2)
+        plt.imshow(results['annotated_image'])
+        plt.title(f"Detection Results ({results['detections']} objects)", fontsize=14, fontweight='bold')
+        plt.axis('off')
+        
+        plt.tight_layout()
+        
+        # Save results if enabled
+        if CONFIG['save_results']:
+            timestamp = int(time.time())
+            result_path = os.path.join(CONFIG['output_dir'], f'detection_result_{timestamp}.png')
+            plt.savefig(result_path, dpi=300, bbox_inches='tight')
+            print(f"💾 Results saved to: {result_path}")
+            
+            # Save detection data
+            json_path = os.path.join(CONFIG['output_dir'], f'detection_data_{timestamp}.json')
+            detection_data = {
+                'image_path': CONFIG['image_path'],
+                'model_path': CONFIG['model_path'],
+                'detections': [
+                    {
+                        'class_name': CONFIG['selected_classes'][min(int(class_id), len(CONFIG['selected_classes']) - 1)],
+                        'class_id': int(class_id),
+                        'confidence': float(score),
+                        'bbox': [float(x) for x in box]
+                    }
+                    for box, score, class_id in zip(results['boxes'], results['scores'], results['class_ids'])
+                ],
+                'config': CONFIG
+            }
+            
+            with open(json_path, 'w') as f:
+                json.dump(detection_data, f, indent=2)
+            print(f"📄 Detection data saved to: {json_path}")
+        
+        plt.show()
+        
+    except Exception as e:
+        print(f"❌ Error during detection: {e}")
+        import traceback
+        traceback.print_exc()
 
-print("\n✅ ONNX inference completed!")
+if __name__ == "__main__":
+    main()
