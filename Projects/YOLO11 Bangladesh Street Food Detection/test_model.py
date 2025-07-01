@@ -19,8 +19,8 @@ SELECTED_CLASSES = [
 
 # YOLO model parameters (adjust based on your model)
 INPUT_SIZE = 640  # Standard YOLO input size
-CONFIDENCE_THRESHOLD = 0.25
-NMS_THRESHOLD = 0.45
+CONFIDENCE_THRESHOLD = 0.20
+NMS_THRESHOLD = 0.50
 
 def preprocess_image(image, input_size=640):
     """Preprocess image for ONNX model inference"""
