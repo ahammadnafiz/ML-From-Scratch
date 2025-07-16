@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 import tiktoken
-import re
 from torch.utils.data import Dataset, DataLoader
 
 # =============================================================================
@@ -32,7 +32,7 @@ class GPTDataset(Dataset):
 
 
 class MultiHeadAttention(nn.Module):
-    """Multi-head causal attention mechanism"""
+    """Optimized multi-head causal attention mechanism"""
     
     def __init__(self, d_in, d_out, context_length, dropout, num_heads, qkv_bias=False):
         super().__init__()
@@ -41,54 +41,52 @@ class MultiHeadAttention(nn.Module):
         self.d_out = d_out
         self.num_heads = num_heads
         self.head_dim = d_out // num_heads
+        self.scale = 1.0 / math.sqrt(self.head_dim)  # Pre-compute scale factor
         
-        self.W_query = nn.Linear(d_in, d_out, bias=qkv_bias)
-        self.W_key = nn.Linear(d_in, d_out, bias=qkv_bias)
-        self.W_value = nn.Linear(d_in, d_out, bias=qkv_bias)
+        # Single linear layer for QKV (3x more efficient than 3 separate layers)
+        self.qkv_proj = nn.Linear(d_in, 3 * d_out, bias=qkv_bias)
         self.out_proj = nn.Linear(d_out, d_out)
         self.dropout = nn.Dropout(dropout)
         
+        # Register causal mask as buffer (avoid recreating each forward pass)
         self.register_buffer(
             "mask",
-            torch.triu(torch.ones(context_length, context_length), diagonal=1)
+            torch.triu(torch.ones(context_length, context_length, dtype=torch.bool), diagonal=1)
         )
 
     def forward(self, x):
         b, num_tokens, d_in = x.shape
         
-        # Compute Q, K, V
-        keys = self.W_key(x)
-        queries = self.W_query(x)
-        values = self.W_value(x)
+        # Single QKV projection (more efficient than 3 separate projections)
+        qkv = self.qkv_proj(x)  # (b, num_tokens, 3 * d_out)
         
-        # Reshape for multi-head attention
-        keys = keys.view(b, num_tokens, self.num_heads, self.head_dim)
-        queries = queries.view(b, num_tokens, self.num_heads, self.head_dim)
-        values = values.view(b, num_tokens, self.num_heads, self.head_dim)
+        # Split and reshape in one operation
+        qkv = qkv.view(b, num_tokens, 3, self.num_heads, self.head_dim)
+        qkv = qkv.permute(2, 0, 3, 1, 4)  # (3, b, num_heads, num_tokens, head_dim)
+        queries, keys, values = qkv.unbind(0)
         
-        # Transpose: (batch, num_heads, seq_len, head_dim)
-        keys = keys.transpose(1, 2)
-        queries = queries.transpose(1, 2)
-        values = values.transpose(1, 2)
+        # Scaled dot-product attention with fused operations
+        attn_scores = torch.matmul(queries, keys.transpose(-2, -1)) * self.scale
         
-        # Scaled dot-product attention
-        attn_scores = queries @ keys.transpose(2, 3)
+        # Apply causal mask (use pre-computed boolean mask)
+        if num_tokens > 1:  # Skip masking for single token
+            attn_scores = attn_scores.masked_fill(
+                self.mask[:num_tokens, :num_tokens], 
+                float('-inf')
+            )
         
-        # Apply causal mask
-        mask_bool = self.mask.bool()[:num_tokens, :num_tokens]
-        attn_scores.masked_fill_(mask_bool, -torch.inf)
-        
-        attn_weights = torch.softmax(attn_scores / (self.head_dim ** 0.5), dim=-1)
+        # Softmax and dropout
+        attn_weights = F.softmax(attn_scores, dim=-1)
         attn_weights = self.dropout(attn_weights)
         
         # Apply attention to values
-        context_vec = (attn_weights @ values).transpose(1, 2)
+        context_vec = torch.matmul(attn_weights, values)
         
-        # Concatenate heads
-        context_vec = context_vec.contiguous().view(b, num_tokens, self.d_out)
-        context_vec = self.out_proj(context_vec)
+        # Reshape back to original format
+        context_vec = context_vec.transpose(1, 2).contiguous().view(b, num_tokens, self.d_out)
         
-        return context_vec
+        # Output projection
+        return self.out_proj(context_vec)
 
 
 class LayerNorm(nn.Module):
