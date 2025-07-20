@@ -425,14 +425,205 @@ def print_model_info(model):
 
 
 # =============================================================================
+# Chapter 5: Training and Evaluation Functions  
+# =============================================================================
+
+def calc_loss_batch(input_batch, target_batch, model, device):
+    """Calculate loss for a single batch"""
+    input_batch, target_batch = input_batch.to(device), target_batch.to(device)
+    logits = model(input_batch)
+    loss = torch.nn.functional.cross_entropy(logits.flatten(0, 1), target_batch.flatten())
+    return loss
+
+
+def calc_loss_loader(data_loader, model, device, num_batches=None):
+    """Calculate average loss over a data loader"""
+    total_loss = 0.
+    if len(data_loader) == 0:
+        return float("nan")
+    elif num_batches is None:
+        num_batches = len(data_loader)
+    else:
+        num_batches = min(num_batches, len(data_loader))
+    
+    for i, (input_batch, target_batch) in enumerate(data_loader):
+        if i < num_batches:
+            loss = calc_loss_batch(input_batch, target_batch, model, device)
+            total_loss += loss.item()
+        else:
+            break
+    return total_loss / num_batches
+
+
+def evaluate_model(model, train_loader, val_loader, device, eval_iter):
+    """Evaluate model on train and validation sets"""
+    model.eval()
+    with torch.no_grad():
+        train_loss = calc_loss_loader(train_loader, model, device, num_batches=eval_iter)
+        val_loss = calc_loss_loader(val_loader, model, device, num_batches=eval_iter)
+    model.train()
+    return train_loss, val_loss
+
+
+def text_to_token_ids(text, tokenizer):
+    """Convert text to token IDs"""
+    encoded = tokenizer.encode(text, allowed_special={'<|endoftext|>'})
+    encoded_tensor = torch.tensor(encoded).unsqueeze(0)  # add batch dimension
+    return encoded_tensor
+
+
+def token_ids_to_text(token_ids, tokenizer):
+    """Convert token IDs to text"""
+    flat = token_ids.squeeze(0)  # remove batch dimension
+    return tokenizer.decode(flat.tolist())
+
+
+def generate_and_print_sample(model, tokenizer, device, start_context):
+    """Generate and print a sample text"""
+    model.eval()
+    context_size = model.pos_emb.weight.shape[0]
+    encoded = text_to_token_ids(start_context, tokenizer).to(device)
+    with torch.no_grad():
+        token_ids = generate_text_simple(
+            model=model, idx=encoded,
+            max_new_tokens=50, context_size=context_size
+        )
+    decoded_text = token_ids_to_text(token_ids, tokenizer)
+    print(decoded_text.replace("\n", " "))  # Compact print format
+    model.train()
+
+
+def train_model_simple(model, train_loader, val_loader, optimizer, device, num_epochs,
+                      eval_freq, eval_iter, start_context, tokenizer):
+    """Complete training loop with evaluation and text generation"""
+    # Initialize lists to track losses and tokens seen
+    train_losses, val_losses, track_tokens_seen = [], [], []
+    tokens_seen, global_step = 0, -1
+
+    # Main training loop
+    for epoch in range(num_epochs):
+        model.train()  # Set model to training mode
+        
+        for input_batch, target_batch in train_loader:
+            optimizer.zero_grad()  # Reset loss gradients from previous batch iteration
+            loss = calc_loss_batch(input_batch, target_batch, model, device)
+            loss.backward()  # Calculate loss gradients
+            optimizer.step()  # Update model weights using loss gradients
+            tokens_seen += input_batch.numel()
+            global_step += 1
+
+            # Optional evaluation step
+            if global_step % eval_freq == 0:
+                train_loss, val_loss = evaluate_model(
+                    model, train_loader, val_loader, device, eval_iter)
+                train_losses.append(train_loss)
+                val_losses.append(val_loss)
+                track_tokens_seen.append(tokens_seen)
+                print(f"Ep {epoch+1} (Step {global_step:06d}): "
+                      f"Train loss {train_loss:.3f}, Val loss {val_loss:.3f}")
+
+        # Print a sample text after each epoch
+        print(f"\nEpoch {epoch+1} sample generation:")
+        generate_and_print_sample(model, tokenizer, device, start_context)
+        print()
+
+    return train_losses, val_losses, track_tokens_seen
+
+
+def generate(model, idx, max_new_tokens, context_size, temperature=0.0, top_k=None, eos_id=None):
+    """Enhanced text generation with temperature and top-k sampling"""
+    model.eval()
+    
+    for _ in range(max_new_tokens):
+        idx_cond = idx[:, -context_size:]
+        with torch.no_grad():
+            logits = model(idx_cond)
+        logits = logits[:, -1, :]
+
+        # Apply top-k filtering if specified
+        if top_k is not None:
+            # Keep only top_k values
+            top_logits, _ = torch.topk(logits, top_k)
+            min_val = top_logits[:, -1]
+            logits = torch.where(logits < min_val, torch.tensor(float("-inf")).to(logits.device), logits)
+
+        # Apply temperature scaling
+        if temperature > 0.0:
+            logits = logits / temperature
+            # Apply softmax to get probabilities
+            probs = torch.softmax(logits, dim=-1)
+            # Sample from the distribution
+            idx_next = torch.multinomial(probs, num_samples=1)
+        else:
+            # Greedy decoding: get idx of the vocab entry with the highest logits value
+            idx_next = torch.argmax(logits, dim=-1, keepdim=True)
+
+        # Stop generating early if end-of-sequence token is encountered
+        if eos_id is not None and idx_next == eos_id:
+            break
+
+        # Append sampled index to the running sequence
+        idx = torch.cat((idx, idx_next), dim=1)
+
+    return idx
+
+
+def softmax_with_temperature(logits, temperature):
+    """Apply temperature scaling to logits before softmax"""
+    scaled_logits = logits / temperature
+    return torch.softmax(scaled_logits, dim=0)
+
+
+def calculate_perplexity(loss):
+    """Calculate perplexity from loss"""
+    return torch.exp(torch.tensor(loss)).item()
+
+
+def plot_losses(epochs_seen, tokens_seen, train_losses, val_losses):
+    """Plot training and validation losses"""
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib.ticker import MaxNLocator
+        
+        fig, ax1 = plt.subplots(figsize=(5, 3))
+        
+        # Plot training and validation loss against epochs
+        ax1.plot(epochs_seen, train_losses, label="Training loss")
+        ax1.plot(epochs_seen, val_losses, linestyle="-.", label="Validation loss")
+        ax1.set_xlabel("Epochs")
+        ax1.set_ylabel("Loss")
+        ax1.legend(loc="upper right")
+        ax1.xaxis.set_major_locator(MaxNLocator(integer=True))  # only show integer labels on x-axis
+        ax1.grid(True)
+        
+        # Create a second x-axis for tokens seen
+        ax2 = ax1.twiny()  # Create a second x-axis that shares the same y-axis
+        ax2.plot(tokens_seen, train_losses, alpha=0)  # Invisible plot for aligning ticks
+        ax2.set_xlabel("Tokens seen")
+        
+        fig.tight_layout()  # Adjust layout to make room
+        plt.savefig("loss-plot-book.pdf")
+        plt.show()
+    except ImportError:
+        print("Matplotlib not available. Skipping plot generation.")
+
+
+# =============================================================================
 # Example Usage and Testing
 # =============================================================================
 
 def main():
-    """Main function to demonstrate the LLM implementation"""
+    """Main function to demonstrate the complete LLM implementation"""
+    print("=" * 70)
+    print("LLM from Scratch - Chapter 5 Complete Implementation")
+    print("=" * 70)
     
     # Set random seed for reproducibility
     torch.manual_seed(123)
+    
+    # Setup device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
     
     # Download sample text
     text_url = ("https://raw.githubusercontent.com/rasbt/"
@@ -445,67 +636,143 @@ def main():
     except Exception as e:
         print(f"Error loading text: {e}")
         # Use a simple example text
-        raw_text = "Hello, world. This is a test of the LLM implementation."
+        raw_text = """Every effort moves you forward. Every step brings you closer to your goal. 
+        The journey of learning is continuous. Knowledge grows with every experience. 
+        Progress happens when we persist through challenges. Success comes to those who never give up."""
     
     # Create tokenizer
     tokenizer = tiktoken.get_encoding('gpt2')
     
+    # Configuration for faster training
+    config = GPT_CONFIG_124M.copy()
+    config["context_length"] = 256  # Shorter for faster training
+    config["n_layers"] = 6          # Fewer layers for demo
+    config["emb_dim"] = 384         # Smaller embedding dimension
+    
     # Create model
-    model = GPTModel(GPT_CONFIG_124M)
+    model = GPTModel(config)
+    model.to(device)
     print_model_info(model)
     
-    # Example text generation
-    start_context = "Hello, I am"
-    encoded = tokenizer.encode(start_context)
-    encoded_tensor = torch.tensor(encoded).unsqueeze(0)
+    # Prepare data
+    print("\nPreparing data...")
+    train_ratio = 0.90
+    split_idx = int(train_ratio * len(raw_text))
+    train_data = raw_text[:split_idx]
+    val_data = raw_text[split_idx:]
     
-    print(f"\nInput text: '{start_context}'")
-    print(f"Encoded: {encoded}")
+    # Create data loaders
+    batch_size = 2
+    train_loader = create_dataloader_v1(
+        train_data,
+        batch_size=batch_size,
+        max_length=config["context_length"],
+        stride=config["context_length"],
+        drop_last=True,
+        shuffle=True,
+        num_workers=0
+    )
     
-    # Generate text
+    val_loader = create_dataloader_v1(
+        val_data,
+        batch_size=batch_size,
+        max_length=config["context_length"],
+        stride=config["context_length"],
+        drop_last=False,
+        shuffle=False,
+        num_workers=0
+    )
+    
+    print(f"Training batches: {len(train_loader)}")
+    print(f"Validation batches: {len(val_loader)}")
+    
+    # Initial evaluation
+    print("\nInitial evaluation:")
+    with torch.no_grad():
+        train_loss = calc_loss_loader(train_loader, model, device)
+        val_loss = calc_loss_loader(val_loader, model, device)
+    print(f"Initial - Train loss: {train_loss:.3f}, Val loss: {val_loss:.3f}")
+    print(f"Initial perplexity - Train: {calculate_perplexity(train_loss):.1f}, Val: {calculate_perplexity(val_loss):.1f}")
+    
+    # Training
+    print(f"\nStarting training...")
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.0004, weight_decay=0.1)
+    
+    num_epochs = 5
+    train_losses, val_losses, tokens_seen = train_model_simple(
+        model, train_loader, val_loader, optimizer, device,
+        num_epochs=num_epochs, eval_freq=5, eval_iter=5,
+        start_context="Every effort moves you", tokenizer=tokenizer
+    )
+    
+    # Final evaluation
+    print("\nFinal evaluation:")
+    with torch.no_grad():
+        final_train_loss = calc_loss_loader(train_loader, model, device)
+        final_val_loss = calc_loss_loader(val_loader, model, device)
+    print(f"Final - Train loss: {final_train_loss:.3f}, Val loss: {final_val_loss:.3f}")
+    print(f"Final perplexity - Train: {calculate_perplexity(final_train_loss):.1f}, Val: {calculate_perplexity(final_val_loss):.1f}")
+    
+    # Plot results
+    if train_losses:
+        epochs_tensor = torch.linspace(0, num_epochs, len(train_losses))
+        plot_losses(epochs_tensor, tokens_seen, train_losses, val_losses)
+    
+    # Demonstrate different generation strategies
+    print("\n" + "=" * 50)
+    print("Text Generation Comparison")
+    print("=" * 50)
+    
     model.eval()
-    output = generate_text_simple(
-        model=model,
-        idx=encoded_tensor,
-        max_new_tokens=6,
-        context_size=GPT_CONFIG_124M["context_length"]
-    )
+    test_prompts = [
+        "Every effort moves you",
+        "The meaning of life is",
+        "In the future"
+    ]
     
-    decoded_text = tokenizer.decode(output.squeeze(0).tolist())
-    print(f"Generated text: '{decoded_text}'")
+    for prompt in test_prompts:
+        print(f"\nPrompt: '{prompt}'")
+        encoded = text_to_token_ids(prompt, tokenizer).to(device)
+        
+        # Greedy generation
+        with torch.no_grad():
+            greedy_output = generate_text_simple(
+                model=model, idx=encoded.clone(),
+                max_new_tokens=15, context_size=config["context_length"]
+            )
+        print(f"Greedy: {token_ids_to_text(greedy_output, tokenizer)}")
+        
+        # Temperature sampling
+        with torch.no_grad():
+            temp_output = generate(
+                model=model, idx=encoded.clone(),
+                max_new_tokens=15, context_size=config["context_length"],
+                temperature=0.7
+            )
+        print(f"Temperature: {token_ids_to_text(temp_output, tokenizer)}")
+        
+        # Top-k + Temperature
+        with torch.no_grad():
+            topk_output = generate(
+                model=model, idx=encoded.clone(),
+                max_new_tokens=15, context_size=config["context_length"],
+                temperature=0.7, top_k=25
+            )
+        print(f"Top-k: {token_ids_to_text(topk_output, tokenizer)}")
     
-    # Create dataloader example
-    dataloader = create_dataloader_v1(
-        raw_text[:1000],  # Use first 1000 characters for demo
-        batch_size=2,
-        max_length=64,
-        stride=32,
-        shuffle=False
-    )
+    print("\n" + "=" * 70)
+    print("Chapter 5 Implementation Complete!")
+    print("=" * 70)
     
-    # Show one batch
-    data_iter = iter(dataloader)
-    inputs, targets = next(data_iter)
-    print(f"\nDataloader batch:")
-    print(f"Input shape: {inputs.shape}")
-    print(f"Target shape: {targets.shape}")
-    
-    # Test attention mechanism
-    print(f"\nTesting attention mechanism...")
-    x = torch.rand(2, 10, 768)  # [batch_size, seq_len, emb_dim]
-    attention = MultiHeadAttention(
-        d_in=768,
-        d_out=768,
-        context_length=1024,
-        dropout=0.1,
-        num_heads=12
-    )
-    
-    attn_output = attention(x)
-    print(f"Attention input shape: {x.shape}")
-    print(f"Attention output shape: {attn_output.shape}")
-    
-    print("\nLLM implementation complete!")
+    return {
+        'model': model,
+        'train_losses': train_losses,
+        'val_losses': val_losses,
+        'tokens_seen': tokens_seen,
+        'config': config,
+        'final_train_loss': final_train_loss,
+        'final_val_loss': final_val_loss
+    }
 
 
 if __name__ == "__main__":
