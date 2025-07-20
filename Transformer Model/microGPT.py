@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-import tiktoken  # OpenAI's tokenizer used by GPT models
-import os        # For file system operations (checking if files exist)
-import urllib.request  # For downloading files from URLs
+import tiktoken  
+import os        
+import urllib.request  
 from torch.utils.data import Dataset, DataLoader
 
 # =============================================================================
