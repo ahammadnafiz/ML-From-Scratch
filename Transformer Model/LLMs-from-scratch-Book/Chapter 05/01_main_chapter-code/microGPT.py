@@ -242,6 +242,44 @@ def generate_text(model, idx, max_new_tokens, context_size, temperature=1.0):
     return idx
 
 
+def generate(model, idx, max_new_tokens, context_size, temperature=0.0, top_k=None, eos_id=None):
+    """Enhanced text generation with temperature and top-k sampling"""
+    model.eval()
+    
+    for _ in range(max_new_tokens):
+        idx_cond = idx[:, -context_size:]
+        with torch.no_grad():
+            logits = model(idx_cond)
+        logits = logits[:, -1, :]
+
+        # Apply top-k filtering if specified
+        if top_k is not None:
+            # Keep only top_k values
+            top_logits, _ = torch.topk(logits, top_k)
+            min_val = top_logits[:, -1]
+            logits = torch.where(logits < min_val, torch.tensor(float("-inf")).to(logits.device), logits)
+
+        # Apply temperature scaling
+        if temperature > 0.0:
+            logits = logits / temperature
+            # Apply softmax to get probabilities
+            probs = torch.softmax(logits, dim=-1)
+            # Sample from the distribution
+            idx_next = torch.multinomial(probs, num_samples=1)
+        else:
+            # Greedy decoding: get idx of the vocab entry with the highest logits value
+            idx_next = torch.argmax(logits, dim=-1, keepdim=True)
+
+        # Stop generating early if end-of-sequence token is encountered
+        if eos_id is not None and idx_next == eos_id:
+            break
+
+        # Append sampled index to the running sequence
+        idx = torch.cat((idx, idx_next), dim=1)
+
+    return idx
+
+
 # =============================================================================
 # Training and Evaluation Functions
 # =============================================================================
@@ -326,6 +364,34 @@ def generate_and_print_sample(model, tokenizer, device, start_context):
     model.train()
 
 
+def softmax_with_temperature(logits, temperature):
+    """Apply temperature scaling to logits before softmax"""
+    scaled_logits = logits / temperature
+    return torch.softmax(scaled_logits, dim=0)
+
+
+def print_sampled_tokens(probas, vocab_dict):
+    """Print sampling statistics for given probabilities"""
+    torch.manual_seed(123)  # For reproducibility
+    sample = [torch.multinomial(probas, num_samples=1).item() for i in range(1_000)]
+    sampled_ids = torch.bincount(torch.tensor(sample), minlength=len(probas))
+    for i, freq in enumerate(sampled_ids):
+        if i in vocab_dict:
+            print(f"{freq} x {vocab_dict[i]}")
+
+
+def top_k_sampling(logits, k):
+    """Apply top-k sampling to logits"""
+    top_logits, top_pos = torch.topk(logits, k=k)
+    # Set all non-top-k values to negative infinity
+    new_logits = torch.where(
+        condition=logits < top_logits[-1],
+        input=torch.tensor(float("-inf")),
+        other=logits
+    )
+    return new_logits, top_logits, top_pos
+
+
 def train_model_simple(model, train_loader, val_loader, optimizer, device, num_epochs,
                       eval_freq, eval_iter, start_context, tokenizer):
     """Complete training loop with evaluation and text generation"""
@@ -367,28 +433,26 @@ def plot_losses(epochs_seen, tokens_seen, train_losses, val_losses):
     """Plot training and validation losses"""
     try:
         import matplotlib.pyplot as plt
+        from matplotlib.ticker import MaxNLocator
         
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+        fig, ax1 = plt.subplots(figsize=(5, 3))
         
-        # Plot against epochs
+        # Plot training and validation loss against epochs
         ax1.plot(epochs_seen, train_losses, label="Training loss")
-        ax1.plot(epochs_seen, val_losses, label="Validation loss", linestyle="--")
+        ax1.plot(epochs_seen, val_losses, linestyle="-.", label="Validation loss")
         ax1.set_xlabel("Epochs")
         ax1.set_ylabel("Loss")
         ax1.legend(loc="upper right")
-        ax1.set_title("Loss vs Epochs")
+        ax1.xaxis.set_major_locator(MaxNLocator(integer=True))  # only show integer labels on x-axis
         ax1.grid(True)
         
-        # Plot against tokens seen
-        ax2.plot(tokens_seen, train_losses, label="Training loss")
-        ax2.plot(tokens_seen, val_losses, label="Validation loss", linestyle="--")
+        # Create a second x-axis for tokens seen
+        ax2 = ax1.twiny()  # Create a second x-axis that shares the same y-axis
+        ax2.plot(tokens_seen, train_losses, alpha=0)  # Invisible plot for aligning ticks
         ax2.set_xlabel("Tokens seen")
-        ax2.set_ylabel("Loss")
-        ax2.legend(loc="upper right")
-        ax2.set_title("Loss vs Tokens Seen")
-        ax2.grid(True)
         
-        plt.tight_layout()
+        fig.tight_layout()  # Adjust layout to make room
+        plt.savefig("loss-plot.pdf")
         plt.show()
     except ImportError:
         print("Matplotlib not available. Skipping plot generation.")
@@ -400,7 +464,7 @@ def calculate_perplexity(loss):
 
 
 def complete_training_pipeline(text_file_path, config=None, num_epochs=10, learning_rate=0.0004, 
-                             batch_size=2, eval_freq=5, eval_iter=5, train_ratio=0.90):
+                             batch_size=2, eval_freq=5, eval_iter=5, train_ratio=0.90, synthetic_text=None):
     """Complete training pipeline from data loading to evaluation"""
     
     if config is None:
@@ -413,14 +477,18 @@ def complete_training_pipeline(text_file_path, config=None, num_epochs=10, learn
     
     # Load and prepare data
     print("Loading data...")
-    try:
-        with open(text_file_path, 'r', encoding='utf-8') as f:
-            text_data = f.read()
-    except FileNotFoundError:
-        print(f"Error: File {text_file_path} not found!")
-        return None
-    
-    print(f"Text length: {len(text_data)} characters")
+    if synthetic_text:
+        text_data = synthetic_text
+        print(f"Using synthetic text with {len(text_data)} characters")
+    else:
+        try:
+            with open(text_file_path, 'r', encoding='utf-8') as f:
+                text_data = f.read()
+        except FileNotFoundError:
+            print(f"Error: File {text_file_path} not found!")
+            return None
+        
+        print(f"Text length: {len(text_data)} characters")
     
     # Split data
     split_idx = int(train_ratio * len(text_data))
@@ -492,12 +560,8 @@ def complete_training_pipeline(text_file_path, config=None, num_epochs=10, learn
     
     # Plot results
     if train_losses:
-        epochs_seen = []
-        for i in range(len(train_losses)):
-            step = (i + 1) * eval_freq
-            epochs_seen.append(step / len(train_loader))
-        
-        plot_losses(epochs_seen, tokens_seen, train_losses, val_losses)
+        epochs_tensor = torch.linspace(0, num_epochs, len(train_losses))
+        plot_losses(epochs_tensor, tokens_seen, train_losses, val_losses)
     
     # Generate final samples
     print("\nFinal text generation samples:")
@@ -590,6 +654,63 @@ def generate_interactive(model, tokenizer, device, max_tokens=50):
     print("Goodbye!")
 
 
+def generate_with_different_strategies(model, tokenizer, device, prompt, strategies):
+    """Generate text using different decoding strategies for comparison"""
+    model.eval()
+    context_size = model.pos_emb.weight.shape[0]
+    encoded = text_to_token_ids(prompt, tokenizer).to(device)
+    
+    print(f"Prompt: '{prompt}'\n")
+    
+    for strategy_name, params in strategies.items():
+        print(f"=== {strategy_name} ===")
+        with torch.no_grad():
+            if 'generate' in strategy_name.lower():
+                # Use the enhanced generate function
+                token_ids = generate(
+                    model=model, idx=encoded.clone(),
+                    max_new_tokens=params.get('max_new_tokens', 25),
+                    context_size=context_size,
+                    temperature=params.get('temperature', 0.0),
+                    top_k=params.get('top_k', None)
+                )
+            else:
+                # Use simple generation
+                token_ids = generate_text_simple(
+                    model=model, idx=encoded.clone(),
+                    max_new_tokens=params.get('max_new_tokens', 25),
+                    context_size=context_size
+                )
+        
+        decoded_text = token_ids_to_text(token_ids, tokenizer)
+        print(f"{decoded_text}\n")
+    
+    model.train()
+
+
+def create_generation_comparison():
+    """Create a comparison of different generation strategies"""
+    return {
+        "Greedy (Deterministic)": {
+            'max_new_tokens': 25,
+            'temperature': 0.0
+        },
+        "Temperature Sampling (Low)": {
+            'max_new_tokens': 25,
+            'temperature': 0.7
+        },
+        "Temperature Sampling (High)": {
+            'max_new_tokens': 25,
+            'temperature': 1.4
+        },
+        "Top-k + Temperature": {
+            'max_new_tokens': 25,
+            'temperature': 1.0,
+            'top_k': 25
+        }
+    }
+
+
 # =============================================================================
 # Example Usage and Main Functions
 # =============================================================================
@@ -634,11 +755,11 @@ def main():
         return None
 
 
-def demo_basic_usage():
-    """Demo basic model usage without training"""
-    print("\n" + "=" * 50)
-    print("Basic Model Demo (No Training)")
-    print("=" * 50)
+def demo_comprehensive():
+    """Comprehensive demo showcasing all functionality"""
+    print("\n" + "=" * 70)
+    print("MicroGPT Comprehensive Demo")
+    print("=" * 70)
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -647,34 +768,139 @@ def demo_basic_usage():
     config = GPT_CONFIG_124M.copy()
     config["context_length"] = 256
     model = GPTModel(config)
+    model.to(device)
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total parameters: {total_params:,}")
     
-    # Example text generation (untrained model)
     tokenizer = tiktoken.get_encoding('gpt2')
-    start_context = "Hello, I am"
-    encoded = tokenizer.encode(start_context)
-    encoded_tensor = torch.tensor(encoded).unsqueeze(0)
     
-    print(f"\nInput: '{start_context}'")
+    # Demo 1: Basic generation comparison
+    print("\n" + "-" * 50)
+    print("Demo 1: Generation Strategy Comparison")
+    print("-" * 50)
     
-    # Generate text
-    output = generate_text(
-        model=model,
-        idx=encoded_tensor,
-        max_new_tokens=10,
-        context_size=config["context_length"],
-        temperature=0.7
+    strategies = create_generation_comparison()
+    generate_with_different_strategies(
+        model, tokenizer, device, 
+        "Every effort moves you", 
+        strategies
     )
     
-    decoded_text = tokenizer.decode(output.squeeze(0).tolist())
-    print(f"Generated (untrained): '{decoded_text}'")
+    # Demo 2: Temperature scaling example
+    print("\n" + "-" * 50)
+    print("Demo 2: Temperature Scaling Effects")
+    print("-" * 50)
+    
+    # Simulate some logits for demonstration
+    vocab_demo = {
+        "closer": 0, "every": 1, "effort": 2, "forward": 3, 
+        "inches": 4, "moves": 5, "pizza": 6, "toward": 7, "you": 8
+    }
+    inverse_vocab = {v: k for k, v in vocab_demo.items()}
+    
+    next_token_logits = torch.tensor(
+        [4.51, 0.89, -1.90, 6.75, 1.63, -1.62, -1.89, 6.28, 1.79]
+    )
+    
+    temperatures = [0.1, 1.0, 2.0]
+    print("Temperature effects on token probabilities:")
+    for temp in temperatures:
+        probas = softmax_with_temperature(next_token_logits, temp)
+        top_3_idx = torch.topk(probas, 3).indices
+        print(f"\nTemperature {temp}:")
+        for i, idx in enumerate(top_3_idx):
+            token = inverse_vocab[idx.item()]
+            prob = probas[idx].item()
+            print(f"  {i+1}. {token}: {prob:.3f}")
+    
+    # Demo 3: Top-k sampling
+    print("\n" + "-" * 50)
+    print("Demo 3: Top-k Sampling")
+    print("-" * 50)
+    
+    k_values = [3, 5, 9]
+    for k in k_values:
+        filtered_logits, top_logits, top_pos = top_k_sampling(next_token_logits, k)
+        probas = torch.softmax(filtered_logits, dim=0)
+        print(f"\nTop-{k} sampling:")
+        for i, pos in enumerate(top_pos):
+            token = inverse_vocab[pos.item()]
+            prob = probas[pos].item()
+            print(f"  {token}: {prob:.3f}")
+    
+    print("\n" + "=" * 70)
+    print("Demo completed! All functionalities showcased.")
+    print("=" * 70)
+
+
+def demo_training_example():
+    """Demo a quick training example with synthetic data"""
+    print("\n" + "=" * 50)
+    print("Quick Training Demo")
+    print("=" * 50)
+    
+    # Create synthetic text data
+    synthetic_text = """Every effort moves you forward. Every step brings you closer to your goal. 
+    The journey of learning is continuous. Knowledge grows with every experience. 
+    Progress happens when we persist through challenges. Success comes to those who never give up.
+    Each day is a new opportunity to improve. Growth requires patience and dedication."""
+    
+    # Quick training with small parameters
+    print("Starting quick training demo...")
+    results = complete_training_pipeline(
+        text_file_path=None,  # Will use synthetic data
+        config={
+            "vocab_size": 50257,
+            "context_length": 64,  # Very short for demo
+            "emb_dim": 256,        # Smaller model
+            "n_heads": 4,
+            "n_layers": 2,
+            "drop_rate": 0.1,
+            "qkv_bias": False
+        },
+        num_epochs=3,
+        learning_rate=0.001,
+        batch_size=1,
+        eval_freq=2,
+        eval_iter=1,
+        train_ratio=0.8,
+        synthetic_text=synthetic_text  # Pass synthetic data
+    )
+    
+    if results:
+        print("\nQuick training completed!")
+        model = results['model']
+        tokenizer = tiktoken.get_encoding('gpt2')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # Test the trained model
+        print("\nGenerating text with trained model:")
+        test_prompts = ["Every effort", "The journey", "Success comes"]
+        
+        for prompt in test_prompts:
+            print(f"\nPrompt: '{prompt}'")
+            generate_and_print_sample(model, tokenizer, device, prompt)
+    
+    return results
 
 
 if __name__ == "__main__":
     import sys
     
-    if len(sys.argv) > 1 and sys.argv[1] == "--demo":
-        demo_basic_usage()
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--demo":
+            demo_comprehensive()
+        elif sys.argv[1] == "--training":
+            demo_training_example()
+        elif sys.argv[1] == "--interactive":
+            # Load a pre-trained model for interactive mode
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            config = GPT_CONFIG_124M.copy()
+            config["context_length"] = 256
+            model = GPTModel(config)
+            tokenizer = tiktoken.get_encoding('gpt2')
+            generate_interactive(model, tokenizer, device)
+        else:
+            main()
     else:
         main()
