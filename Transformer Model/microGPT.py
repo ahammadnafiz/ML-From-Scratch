@@ -1006,27 +1006,29 @@ def demo_microGPT():
         "use_bias_in_projections": False
     }
     
-    # Download sample text
-    # We use "The Verdict" - a short story that provides rich, diverse text for training
-    # This is the same dataset used in the LLMs-from-scratch book for consistency
-    text_url = ("https://raw.githubusercontent.com/rasbt/"
-               "LLMs-from-scratch/main/ch02/01_main-chapter-code/"
-               "the-verdict.txt")
+    # Load text data from local file
+    print("Loading text data from local file...")
+    
+    # Specify the path to your text file
+    text_file_path = "training_data.txt"  # Change this to your actual file path
     
     try:
-        # Attempt to download and load the real text dataset
-        # This gives us much richer training data than artificial sample text
-        sample_text = download_and_load_text(text_url, 'the-verdict.txt')
-        print(f"Successfully loaded 'The Verdict' text with {len(sample_text)} characters")
-        print("This real literary text will provide much better training data than synthetic examples")
-    except Exception as e:
-        # Fallback to synthetic text if download fails (network issues, etc.)
-        print(f"Error loading remote text: {e}")
-        print("Using fallback synthetic text with your specified prompts...")
+        # Load text from local file
+        with open(text_file_path, 'r', encoding='utf-8') as file:
+            sample_text = file.read()
         
-        # Create fallback text that includes the user's specified prompts
-        # This ensures the model will be able to continue these specific phrases
-        # even if we can't download the real dataset
+        print(f"Successfully loaded text from '{text_file_path}'")
+        print(f"File contains {len(sample_text):,} characters")
+        
+        # Check if file has sufficient content
+        if len(sample_text) < 1000:
+            print("Warning: Text file is quite small. Consider using a larger text file for better training results.")
+        
+    except FileNotFoundError:
+        print(f"Error: File '{text_file_path}' not found!")
+        print("Creating fallback text data...")
+        
+        # Fallback to sample text if file not found
         sample_text = """Every effort moves you forward. Every step brings you closer to your goal. 
         The journey of learning is continuous. Knowledge grows with every experience. 
         Progress happens when we persist through challenges. Success comes to those who never give up.
@@ -1040,10 +1042,25 @@ def demo_microGPT():
         Every effort moves you to new heights. The meaning of life is to pursue your passions. 
         In the future, education will be more accessible. Every effort moves you closer to understanding.
         The meaning of life is to help others succeed. In the future, collaboration will solve global problems.
-        """ * 20  # Repeat 20 times to create sufficient training data
-        print("Fallback text includes your specified prompts and is repeated for adequate training volume")
+        """ * 20  # Repeat to create sufficient training data
+        
+        print("Using fallback text data for training")
     
-    print(f"Sample text length: {len(sample_text)} characters")
+    except Exception as e:
+        print(f"Error reading file '{text_file_path}': {e}")
+        print("Creating fallback text data...")
+        
+        # Fallback text in case of any other error
+        sample_text = """Every effort moves you forward. Every step brings you closer to your goal. 
+        The journey of learning is continuous. Knowledge grows with every experience. 
+        Progress happens when we persist through challenges. Success comes to those who never give up.
+        The meaning of life is to find purpose and happiness. In the future, technology will transform our world.
+        """ * 50  # Repeat to create sufficient training data
+        
+        print("Using fallback text data for training")
+    
+    print(f"Final text length: {len(sample_text):,} characters")
+    print("Text data ready for training")
     
     # Create model
     model = create_gpt_model(demo_config, device)
