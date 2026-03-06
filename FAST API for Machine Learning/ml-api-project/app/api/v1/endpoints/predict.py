@@ -4,14 +4,14 @@ import io
 from fastapi import APIRouter, File, UploadFile, HTTPException, Depends
 from PIL import Image
 from loguru import logger
-from transformers.image_utils import valid_images
 
 from app.schemas.response_schemas import (
     PredictionResponse,
     PredictionResult,
     TumorProbabilities,
     BatchPredictionResponse,
-    BatchPredictionResponseList
+    BatchPredictionData,
+    BatchPredictionItem,
 )
 
 from app.services.tumor_classifier import tumor_classifier
@@ -161,29 +161,29 @@ async def predict_batch(
     
     logger.info(f"Batch prediction request | num_files={len(files)}")
 
-    valid_images: list[Image.Image] = []
+    valid_pil_images: list[Image.Image] = []
     valid_indices: list[int] = []
-    results: list[BatchPredictionResponseList] = []
+    results: list[BatchPredictionItem] = []
 
     for i, file in enumerate(files):
         try:
             file_bytes = await file.read()
             image = validate_and_open_image(file, file_bytes)
-            valid_images.append(image)
+            valid_pil_images.append(image)
             valid_indices.append(i)
-            results.append(BatchPredictionResponseList(filename=file.filename or f"file_{i}"))
+            results.append(BatchPredictionItem(filename=file.filename or f"file_{i}"))
         except HTTPException as e:
             # Don't fail the whole batch for one bad image
             results.append(
-                BatchPredictionResponseList(
+                BatchPredictionItem(
                     filename=file.filename or f"file_{i}",
                     error=e.detail
                 )
             )
 
-    if valid_images:
+    if valid_pil_images:
         try:
-            batch_results = tumor_classifier.predict_batch(valid_images)
+            batch_results = tumor_classifier.predict_batch(valid_pil_images)
             # Map results back to their original positions
             for batch_idx, original_idx in enumerate(valid_indices):
                 results[original_idx].result = dict_to_prediction_result(
@@ -192,20 +192,20 @@ async def predict_batch(
         except Exception as e:
             logger.error(f"Batch inference failed: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Batch inference error: {str(e)}")
-    
+
     successful = sum(1 for r in results if r.result is not None)
     failed = len(results) - successful
-    
+
     logger.info(f"Batch complete | successful={successful} | failed={failed}")
-    
+
     return BatchPredictionResponse(
         success=True,
         message=f"Processed {len(files)} images: {successful} successful, {failed} failed",
-        data={
-            "total": len(files),
-            "successful": successful,
-            "failed": failed,
-            "results": [r.model_dump() for r in results],
-        }
+        data=BatchPredictionData(
+            total=len(files),
+            successful=successful,
+            failed=failed,
+            results=results,
+        ),
     )
 

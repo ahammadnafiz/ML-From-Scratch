@@ -161,6 +161,9 @@ class TumorClassifier:
                 "inference_time_ms": round(per_image_time_ms, 2),  # Set the inference time for each image
                 "model_version": self.model_version,
             }
+            results.append(result)
+
+        return results
 
     def get_model_info(self) -> dict:
         param_count = (

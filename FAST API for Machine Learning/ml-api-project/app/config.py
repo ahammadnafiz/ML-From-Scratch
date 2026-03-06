@@ -1,4 +1,4 @@
-#app/config.py
+# app/config.py
 
 from pydantic_settings import BaseSettings
 from pydantic import Field
@@ -65,6 +65,9 @@ def configure_logging(log_level: str = "INFO"):
     )
 
 
-# Initialize settings and configure logging
+# Alias for main.py
+setup_logging = configure_logging
+
+# Initialize settings
 settings = Settings()
     

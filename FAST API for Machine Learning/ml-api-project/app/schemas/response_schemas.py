@@ -1,4 +1,4 @@
-#app/schemas/response_schemas.py
+# app/schemas/response_schemas.py
 
 from pydantic import BaseModel, Field
 from typing import Any, Optional
@@ -14,15 +14,15 @@ class TumorProbabilities(BaseModel):
     pituitary: float = Field(..., ge=0.0, le=1.0, description="Probability of pituitary tumor")
 
 class PredictionResult(BaseModel):
-    predicted_class: str = Field(..., description="The class with the highest predicted probability", example=["glioma"])
+    predicted_class: str = Field(..., description="The class with the highest predicted probability")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score for the predicted class")
     probabilities: TumorProbabilities = Field(..., description="Probabilities for each tumor class")
     description: str = Field(..., description="Description of the predicted class")
     inference_time_ms: float = Field(..., ge=0.0, description="Time taken for inference in milliseconds")
     model_version: str = Field(..., description="Version of the model used for prediction")
 
-class Config:
-    json_schema_extra = {
+    class Config:
+        json_schema_extra = {
             "example": {
                 "predicted_class": "glioma",
                 "confidence": 0.9423,
@@ -37,17 +37,27 @@ class Config:
                 "model_version": "1.0.0",
             }
         }
-    
+
+
 class PredictionResponse(BaseResponse):
     data: PredictionResult = Field(..., description="The result of the tumor classification prediction")
 
-class BatchPredictionResponse(BaseModel):
+class BatchPredictionItem(BaseModel):
+    """Single item in a batch prediction response."""
     filename: str = Field(..., description="Name of the input image file")
     result: Optional[PredictionResult] = Field(None, description="The result of the tumor classification prediction for this file")
     error: Optional[str] = Field(None, description="Error message if prediction failed for this file")
 
-class BatchPredictionResponseList(BaseResponse):
-    data: dict[str, BatchPredictionResponse] = Field(..., description="Dictionary mapping file names to their prediction results")
+
+class BatchPredictionData(BaseModel):
+    total: int = Field(..., description="Total number of images in the batch")
+    successful: int = Field(..., description="Number of successful predictions")
+    failed: int = Field(..., description="Number of failed predictions")
+    results: list[BatchPredictionItem] = Field(..., description="Per-file prediction results or errors")
+
+
+class BatchPredictionResponse(BaseResponse):
+    data: BatchPredictionData = Field(..., description="Batch prediction summary and per-file results")
 
 class ModelInfoResponse(BaseResponse):
     data: dict[str, Any] = Field(..., description="Information about the model, such as name, version, and path")

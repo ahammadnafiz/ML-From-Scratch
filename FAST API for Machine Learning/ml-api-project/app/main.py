@@ -1,47 +1,71 @@
 # app/main.py
 
-from fastapi import FastAPI
+import os
+from contextlib import asynccontextmanager
 
-# Create FastAPI instance
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from loguru import logger
+
+from app.api.v1.router import v1_router
+from app.services.tumor_classifier import tumor_classifier
+from app.core.middleware import RequestLoggingMiddleware
+from app.config import settings, setup_logging
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    os.makedirs("logs", exist_ok=True)
+    setup_logging(settings.log_level)
+    
+    logger.info(f"Starting {settings.app_name} v{settings.app_version}...")
+    logger.info(f"Environment: {settings.app_env}")
+    
+    try:
+        tumor_classifier.load(
+            model_path=settings.model_path,
+            model_version=settings.model_version,
+        )
+        logger.success("✅ Model loaded. API is ready to serve predictions.")
+    except FileNotFoundError as e:
+        logger.critical(f"❌ Model load failed: {e}")
+        logger.critical(f"Place model at {settings.model_path} and restart.")
+        raise
+    yield
+    
+    logger.info("Shutting down gracefully...")
+    
+    
 app = FastAPI(
-    title="ML Deployment API",
-    description="A simple API for deploying machine learning models",
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
+    title=settings.app_name,
+    version=settings.app_version,
+    description="""
+    ## 🧠 Brain Tumor Classification API
+    
+    Endpoints for ML inference, authentication, and health monitoring.
+    """,
+    lifespan=lifespan,
+    contact={"name": "API Support", "email": "support@yourapi.com"},
 )
 
-# Root endpoint
-@app.get("/")
-def root():
-    return {"message": "Welcome to the ML Deployment API!", "status": "healthy"}
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.add_middleware(RequestLoggingMiddleware)
 
-# GET - Retrieve data, no body required, just query parameters
-@app.get("/models")
-def list_models():
-    return {"models": [ 'classifier_v1', 'regressor_v1', 'sentiment_analyzer_v1' ]}
+# Exception handlers
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()},
+    )
 
-# POST - Create a new resource, body required
-@app.post("/predict")
-def predict(data: dict):
-    # Placeholder for actual prediction logic
-    return {"prediction": "sample_result"}
-
-# PUT - Update an existing resource, body required
-@app.put("/models/{model_id}")
-def update_model(model_id: str, model_data: dict):
-    # Placeholder for actual update logic
-    return {"message": f"Model {model_id} updated successfully"}
-
-# DELETE - Remove a resource, no body required
-@app.delete("/models/{model_id}")
-def delete_model(model_id: str):
-    # Placeholder for actual delete logic
-    return {"message": f"Model {model_id} deleted successfully"}
-
-# PATCH - Partially update a resource, body required
-@app.patch("/models/{model_id}")
-def patch_model(model_id: str):
-    # Placeholder for actual patch logic
-    return {"message": f"Model {model_id} patched successfully"}
+# Mount API router
+app.include_router(v1_router)
