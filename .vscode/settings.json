@@ -1,5 +1,4 @@
 {
-    "git.ignoreLimitWarning": true,
-    "files.autoSave": "afterDelay",
-    "editor.minimap.enabled": true
+    "python-envs.defaultEnvManager": "ms-python.python:conda",
+    "python-envs.defaultPackageManager": "ms-python.python:conda"
 }
