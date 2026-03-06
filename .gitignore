@@ -169,6 +169,11 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# ML model weights (e.g. Brain Tumor API)
+best.pth
+**/best.pth
+
 ML Practice/Deep Learning/datasets/train_catvnoncat.h5
 ML Practice/Deep Learning/datasets/test_catvnoncat.h5
 ML Practice/Deep Learning/datasets/*.h5
